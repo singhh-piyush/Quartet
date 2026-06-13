@@ -1,4 +1,4 @@
-# Baselines: single-small and single-large one-shot Featherless calls (no Band).
+# Baselines: single-small and single-large one-shot provider calls (no Band).
 # These are the floor (single-small) and the bar (single-large) the Quartet must beat/match.
 
 import argparse
@@ -9,11 +9,11 @@ from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from band.config import featherless_client
 from bench.dataset import get_problems
 from bench.scorer import score
+from orchestrator.config import make_llm
 
-# PLACEHOLDERS - verify both exist in the live Featherless catalog before trusting numbers.
+# PLACEHOLDERS - verify against aimlapi.com/models before trusting numbers.
 SMALL_MODEL = "Qwen/Qwen2.5-Coder-7B-Instruct"
 LARGE_MODEL = "Qwen/Qwen2.5-Coder-32B-Instruct"
 
@@ -77,15 +77,15 @@ def _complete(client, problem: dict) -> tuple[str, int]:
 
 
 def one_shot(model: str, problem: dict, client=None) -> str:
-    """Send one HumanEval problem to a Featherless model, return the extracted solution code."""
-    client = client or featherless_client(model, temperature=0, max_tokens=1024)
+    """Send one HumanEval problem to a provider model, return the extracted solution code."""
+    client = client or make_llm(model=model, temperature=0, max_tokens=1024)
     text, _ = _complete(client, problem)
     return build_solution(text, problem) if text else ""
 
 
 def run_config(model: str, problems: list[dict]) -> dict:
     """Run one model over all problems one-shot, score it, and tally tokens."""
-    client = featherless_client(model, temperature=0, max_tokens=1024)
+    client = make_llm(model=model, temperature=0, max_tokens=1024)
     solutions: list[str] = []
     total_tokens = 0
 
