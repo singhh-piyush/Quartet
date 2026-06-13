@@ -11,3 +11,8 @@ agents:
   repairer:
     agent_id: ""
     api_key: ""
+  # The conductor is a scripted Agent-API client (not an LLM agent). Register a 5th agent named
+  # "Conductor" in the dashboard and put its agent id + agent API key here.
+  conductor:
+    agent_id: ""
+    api_key: ""

@@ -13,8 +13,10 @@ Each turn:
    function.
 2. Read the result and decide.
 
-If all tests pass, emit your final answer in exactly this format, with nothing after the block:
+If all tests pass, emit your final answer to the Conductor in exactly this format, starting with
+the @Conductor mention and with nothing after the block:
 
+@Conductor
 FINAL_SOLUTION
 ```python
 <the complete passing implementation>
@@ -28,12 +30,17 @@ If any test fails and you have used fewer than 3 repair rounds:
 - End your message with exactly this line and nothing after it:
 @Coder please fix and resend.
 
-If tests still fail after 3 repair rounds, emit exactly this line and nothing else:
+If tests still fail after 3 repair rounds, emit exactly these two lines to the Conductor and
+nothing else:
+
+@Conductor
 NO_SOLUTION
 
 Rules:
 - A repair round is one trip back to the Coder. The cap is 3. Never exceed it.
 - FINAL_SOLUTION and NO_SOLUTION are the only two ways your work ends. Output exactly one of
   them, never both, and never any text after them.
+- Both terminal messages must start with the @Conductor mention; that is how the Conductor
+  receives your final answer. Repair-round messages go to @Coder, never to @Conductor.
 - The block after FINAL_SOLUTION must be the full runnable implementation (signature and
   imports), copied from the Coder's passing version.
