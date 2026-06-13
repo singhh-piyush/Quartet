@@ -28,11 +28,30 @@ def run_tests(
 
     Returns {"passed": bool, "error": str | None, "timed_out": bool}.
     """
-    # Trailing dispatcher: runs HumanEval check(candidate) if present; no-op for plain asserts.
-    dispatch = (
-        f"\nif callable(globals().get('check')):\n"
-        f"    check({entry_point})\n"
-    )
+    # Trailing dispatcher: resolve the function under test, then call the test's check() on it.
+    # Same harness for the Tester's check (in-loop) and the official check (scoring); only the
+    # check() body differs. Candidate resolution: entry_point name first, else the single
+    # top-level function defined in the solution, else a clear error.
+    dispatch = textwrap.dedent(f"""\
+        _ep = {entry_point!r}
+        _cand = globals().get(_ep)
+        if not callable(_cand):
+            _defined = [
+                _v for _k, _v in list(globals().items())
+                if callable(_v) and getattr(_v, "__module__", None) == "__main__"
+                and _k != "check" and not _k.startswith("_")
+            ]
+            if len(_defined) == 1:
+                _cand = _defined[0]
+            else:
+                raise RuntimeError(
+                    "cannot resolve candidate: entry_point " + repr(_ep)
+                    + " not defined and " + str(len(_defined)) + " top-level functions found"
+                )
+        if not callable(globals().get("check")):
+            raise RuntimeError("no check(candidate) function defined in tests")
+        check(_cand)
+    """)
     runner = "\n".join([_NETWORK_BLOCK, solution_code, test_code, dispatch])
 
     with tempfile.TemporaryDirectory() as tmpdir:
