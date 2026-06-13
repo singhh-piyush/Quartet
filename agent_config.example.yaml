@@ -1,0 +1,13 @@
+agents:
+  spec:
+    agent_id: ""
+    api_key: ""
+  coder:
+    agent_id: ""
+    api_key: ""
+  tester:
+    agent_id: ""
+    api_key: ""
+  repairer:
+    agent_id: ""
+    api_key: ""
