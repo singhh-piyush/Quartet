@@ -10,12 +10,20 @@ Only previews go on the wire (<=200 chars); never api keys or full message bodie
 
 Event types and their extra fields:
   agent_connected
+  room_joined        room_id  (agent first handled a message for this room; join signal)
+  run_started        task_id, models  (conductor: a live run began; models is a role->model map)
   message_received   sender, preview
   llm_call           model, prompt_tokens, completion_tokens, total_tokens, duration_ms
   message_posted     preview, mentions
-  tool_call          tool, args_summary, result{passed,timed_out}, duration_ms
+  tool_call          tool, args_summary, result{passed,timed_out,cases?}, duration_ms
   terminal_emitted   kind  (FINAL_SOLUTION | NO_SOLUTION)
-  scored             passed
+  baseline_started   model  (role single_large: the lone large model began the same task)
+  baseline_solution  preview  (role single_large: its one-shot candidate)
+  scored             passed   (role conductor for the Quartet, single_large for the competitor)
+
+All event types are additive: emit() serializes whatever fields it is given, so new types do not
+need code changes here. The 200-char preview cap below still bounds every preview/sender/args field,
+so full message bodies never reach the event stream (the reasoning transcript holds those instead).
 """
 
 from __future__ import annotations

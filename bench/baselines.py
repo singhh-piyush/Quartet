@@ -3,13 +3,16 @@
 
 import argparse
 import json
+import logging
 import re
 import time
 from pathlib import Path
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from bench.dataset import get_problems
+from bench.dataset import get_problem, get_problems
+from bench.events import emit
+from bench.sandbox import run_tests
 from bench.scorer import score
 from orchestrator.config import make_llm
 
@@ -83,6 +86,42 @@ def one_shot(model: str, problem: dict, client=None) -> str:
     return build_solution(text, problem) if text else ""
 
 
+def run_live(model: str, problem: dict, role: str = "single_large") -> dict:
+    """One-shot `model` on a single problem, emitting telemetry to QUARTET_EVENTS_PATH so the demo
+    can race the lone large model against the Quartet live. Scores against the held-out official
+    test (the same hidden test the conductor uses for the Quartet). Returns a small record.
+
+    Provider/model come from the spawning environment (the launcher sets LLM_PROVIDER and the model
+    for this process), so the large competitor can be the local server or a cloud model unchanged.
+    """
+    task_id = problem["task_id"]
+    emit("baseline_started", role=role, task_id=task_id, model=model)
+    start = time.monotonic()
+    tokens = 0
+    solution = ""
+    try:
+        client = make_llm(model=model, temperature=0, max_tokens=1024)
+        text, tokens = _complete(client, problem)
+        solution = build_solution(text, problem) if text else ""
+    except Exception as e:  # noqa: BLE001 - a provider error must surface as a lost race, not a crash
+        logging.warning("[%s] %s generation failed: %s", task_id, role, e)
+    duration_ms = int((time.monotonic() - start) * 1000)
+    emit("llm_call", role=role, task_id=task_id, model=model,
+         prompt_tokens=0, completion_tokens=0, total_tokens=tokens, duration_ms=duration_ms)
+    emit("baseline_solution", role=role, task_id=task_id, preview=solution)
+    if solution:
+        result = run_tests(solution, problem["test"], problem["entry_point"])
+    else:
+        result = {"passed": False, "error": "no solution generated", "timed_out": False}
+    emit("scored", role=role, task_id=task_id, passed=bool(result["passed"]),
+         status="FINAL_SOLUTION" if solution else "NO_SOLUTION")
+    return {
+        "task_id": task_id, "model": model, "role": role,
+        "passed": bool(result["passed"]), "total_tokens": tokens,
+        "duration_ms": duration_ms, "solution": solution,
+    }
+
+
 def run_config(model: str, problems: list[dict]) -> dict:
     """Run one model over all problems one-shot, score it, and tally tokens."""
     client = make_llm(model=model, temperature=0, max_tokens=1024)
@@ -104,7 +143,21 @@ def run_config(model: str, problems: list[dict]) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run single-model HumanEval baselines.")
     ap.add_argument("--n", type=int, default=10, help="number of problems (default 10)")
+    ap.add_argument("--live", action="store_true", help="emit telemetry for one task (demo race lane)")
+    ap.add_argument("--task", help="single HumanEval task id (used with --live)")
+    ap.add_argument("--model", help="model to run (used with --live; default the large baseline)")
+    ap.add_argument("--role", default="single_large", help="event role for the live lane")
     args = ap.parse_args()
+
+    if args.live:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+        if not args.task:
+            ap.error("--live requires --task")
+        problem = get_problem(args.task)
+        model = args.model or LARGE_MODEL
+        rec = run_live(model, problem, role=args.role)
+        print(f"{args.role} {rec['task_id']}: passed={rec['passed']} tokens={rec['total_tokens']} model={model}")
+        return
 
     problems = get_problems(n=args.n)
     out = {}

@@ -1,0 +1,27 @@
+{
+  "_note": "Illustrative SAMPLE data for the Results view. Used by demo_server /api/results only when a real results file is missing or has no passes. The server tags these as source=sample so the UI badges them as not-real. Replace by running `uv run python -m bench.baselines` and the Quartet over the full benchmark.",
+  "baselines": {
+    "single_small": {
+      "model": "Qwen/Qwen2.5-Coder-7B-Instruct",
+      "pass_count": 17,
+      "total": 40,
+      "pass_rate": 0.425,
+      "total_tokens": 61000
+    },
+    "single_large": {
+      "model": "Qwen/Qwen2.5-Coder-32B-Instruct",
+      "pass_count": 31,
+      "total": 40,
+      "pass_rate": 0.775,
+      "total_tokens": 79000
+    }
+  },
+  "quartet": {
+    "config": "quartet_local",
+    "model": "4x Qwen2.5-Coder-7B-Instruct",
+    "pass_count": 30,
+    "total": 40,
+    "pass_rate": 0.75,
+    "total_tokens": 214000
+  }
+}

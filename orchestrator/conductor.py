@@ -40,6 +40,7 @@ from band.client.rest import (
 from bench.events import emit, read_events
 from bench.sandbox import run_tests
 from orchestrator.config import BAND_REST_URL, get_agent
+from orchestrator.run_config import models_map
 
 _MENTION = re.compile(r"@\[\[[^\]]+\]\]|@\w+")
 
@@ -162,6 +163,44 @@ def write_transcript(client: RestClient, room_id: str, task_id: str) -> None:
     logging.info("[%s] transcript -> %s", task_id, out)
 
 
+def write_transcript_json(client: RestClient, room_id: str, task_id: str, problem: dict, solution: str) -> None:
+    """Persist the full room transcript (every message, full body) to results/transcripts/<run_id>.json.
+
+    This is the source for the demo's reasoning panel: the event stream keeps only 200-char previews,
+    so full agent reasoning lives here instead. Local artifact, the user's own agent output, no keys.
+    """
+    run_id = os.environ.get("QUARTET_RUN_ID", "")
+    resp = _with_retry(client.agent_api_context.get_agent_chat_context, room_id, page_size=100)
+    msgs = sorted(resp.data, key=_msg_ts)
+    messages = []
+    for m in msgs:
+        sender = m.sender_name or m.sender_id or "unknown"
+        content = m.content or ""
+        status, _ = classify(content)
+        inserted = getattr(m, "inserted_at", None)
+        messages.append({
+            "ts": inserted.isoformat() if inserted else None,
+            "role": sender.lower(),
+            "sender": sender,
+            "sender_type": str(getattr(m, "sender_type", "") or ""),
+            "content": content,
+            "mentions": _MENTION.findall(content),
+            "kind": status,
+        })
+    out = {
+        "run_id": run_id,
+        "task_id": task_id,
+        "room_id": room_id,
+        "prompt": problem.get("prompt", ""),
+        "final_solution": solution,
+        "messages": messages,
+    }
+    path = Path("results/transcripts") / f"{run_id}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=2))
+    logging.info("[%s] reasoning transcript -> %s", task_id, path)
+
+
 def open_room(client: RestClient, problem: dict, agent_ids: dict) -> str:
     """Create a room for the problem and add the four agents as participants."""
     # Band's task_id must be a UUID for an existing task; the HumanEval id ("HumanEval/81") is
@@ -201,7 +240,7 @@ def post_problem(client: RestClient, room_id: str, problem: dict, spec_id: str) 
     logging.info("[%s] posted problem, mentioned @Spec", problem["task_id"])
 
 
-def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: str, deadline: float, poll: float, task_id: str | None = None):
+def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: str, deadline: float, poll: float, task_id: str | None = None, should_stop=None):
     """Poll the room conversation until the Repairer's terminal message or the deadline.
 
     Reads the whole room via the agent context endpoint (not the conductor's inbox), so every new
@@ -215,6 +254,9 @@ def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: st
     start = time.monotonic()
     last_beat = start
     while time.monotonic() < deadline:
+        if should_stop and should_stop():
+            logging.info("    (harvest aborted on stop)")
+            return "TIMEOUT", ""
         resp = _with_retry(client.agent_api_context.get_agent_chat_context, room_id, page_size=100)
         saw_new = False
         for msg in sorted(resp.data, key=_msg_ts):
@@ -251,19 +293,18 @@ def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: st
     return "TIMEOUT", ""
 
 
-def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id: str, timeout: float, poll: float, settle: float, trace: bool = False) -> dict:
-    """Drive one problem end to end and score the harvested solution against the official test."""
+def drive_room(client: RestClient, problem: dict, room_id: str, agent_ids: dict, conductor_id: str, timeout: float, poll: float, trace: bool = False, should_stop=None) -> dict:
+    """Post the problem into an already-open room, harvest the terminal, score, write the transcript.
+
+    Split out from run_problem so the demo launcher can pre-create the room and start the agents into
+    it (room-first ordering) before driving it, which makes the four agents join deterministically
+    instead of racing the RoomAddedEvent push.
+    """
     start = time.monotonic()
     task_id = problem["task_id"]
-    room_id = open_room(client, problem, agent_ids)
-    # Let the just-added agents receive the room-added event and subscribe before we post, so the
-    # first message is not pushed before Spec is listening. A missed push still self-heals via the
-    # agents' idle resync, but settling here avoids the wait in the common case.
-    if settle > 0:
-        logging.info("[%s] waiting %.0fs for agents to join the room...", task_id, settle)
-        time.sleep(settle)
+    emit("run_started", role="conductor", room_id=room_id, task_id=task_id, models=models_map())
     post_problem(client, room_id, problem, agent_ids["spec"])
-    status, solution = harvest(client, room_id, agent_ids["repairer"], conductor_id, time.monotonic() + timeout, poll, task_id)
+    status, solution = harvest(client, room_id, agent_ids["repairer"], conductor_id, time.monotonic() + timeout, poll, task_id, should_stop=should_stop)
 
     record = {
         "task_id": task_id,
@@ -285,6 +326,10 @@ def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id
         record["error"] = f"no terminal message within {timeout:.0f}s"
 
     emit("scored", role="conductor", room_id=room_id, task_id=task_id, passed=record["passed"], status=status)
+    try:
+        write_transcript_json(client, room_id, task_id, problem, solution)
+    except Exception as e:  # noqa: BLE001 - a transcript failure must not sink the run
+        logging.warning("[%s] reasoning transcript failed: %s", task_id, e)
     if trace:
         try:
             write_transcript(client, room_id, task_id)
@@ -296,6 +341,19 @@ def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id
         task_id, status, record["passed"], time.monotonic() - start,
     )
     return record
+
+
+def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id: str, timeout: float, poll: float, settle: float, trace: bool = False) -> dict:
+    """Open a room, wait for the agents to join, then drive it (CLI / benchmark path)."""
+    task_id = problem["task_id"]
+    room_id = open_room(client, problem, agent_ids)
+    # Let the just-added agents receive the room-added event and subscribe before we post, so the
+    # first message is not pushed before Spec is listening. A missed push still self-heals via the
+    # agents' idle resync, but settling here avoids the wait in the common case.
+    if settle > 0:
+        logging.info("[%s] waiting %.0fs for agents to join the room...", task_id, settle)
+        time.sleep(settle)
+    return drive_room(client, problem, room_id, agent_ids, conductor_id, timeout, poll, trace)
 
 
 def _ensure_run_env() -> str:

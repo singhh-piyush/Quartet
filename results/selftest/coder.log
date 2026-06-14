@@ -1,0 +1,148 @@
+2026-06-14 08:29:07,967 INFO [coder] connected. Waiting for room messages...
+2026-06-14 08:29:08,295 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/me "HTTP/1.1 200 OK"
+2026-06-14 08:29:08,296 INFO LangGraph adapter started for agent: Coder
+2026-06-14 08:29:08,296 INFO Starting AgentRuntime for agent eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:09,028 INFO [WebSocket] Subscribing to topic: agent_control:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:09,257 INFO Successfully subscribed to topic agent_control:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:09,257 INFO [WebSocket] Subscribed to topic: agent_control:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:09,257 INFO Connected to platform
+2026-06-14 08:29:09,257 INFO [WebSocket] Subscribing to topic: agent_rooms:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:09,488 INFO Successfully subscribed to topic agent_rooms:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:09,488 INFO [WebSocket] Subscribed to topic: agent_rooms:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:09,751 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats?page=1&page_size=100 "HTTP/1.1 200 OK"
+2026-06-14 08:29:09,753 INFO [WebSocket] Subscribing to topic: chat_room:48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:29:09,754 INFO [WebSocket] Subscribing to topic: chat_room:7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:29:09,754 INFO [WebSocket] Subscribing to topic: chat_room:0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:29:09,754 INFO [WebSocket] Subscribing to topic: chat_room:20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:29:09,754 INFO [WebSocket] Subscribing to topic: chat_room:6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:29:09,757 INFO [WebSocket] Subscribing to topic: chat_room:0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:29:09,986 INFO Successfully subscribed to topic chat_room:48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:29:09,986 INFO [WebSocket] Subscribing to topic: room_participants:48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:29:09,990 INFO Successfully subscribed to topic chat_room:7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:29:09,990 INFO [WebSocket] Subscribing to topic: room_participants:7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:29:09,994 INFO Successfully subscribed to topic chat_room:0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:29:09,994 INFO [WebSocket] Subscribing to topic: room_participants:0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:29:09,999 INFO Successfully subscribed to topic chat_room:20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:29:09,999 INFO [WebSocket] Subscribing to topic: room_participants:20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:29:10,006 INFO Successfully subscribed to topic chat_room:6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:29:10,006 INFO [WebSocket] Subscribing to topic: room_participants:6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:29:10,010 INFO Successfully subscribed to topic chat_room:0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:29:10,010 INFO [WebSocket] Subscribing to topic: room_participants:0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:29:10,219 INFO Successfully subscribed to topic room_participants:48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:29:10,219 INFO Starting ExecutionContext for room: 48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:29:10,229 INFO Successfully subscribed to topic room_participants:7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:29:10,229 INFO Successfully subscribed to topic room_participants:0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:29:10,229 INFO Starting ExecutionContext for room: 7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:29:10,229 INFO Starting ExecutionContext for room: 0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:29:10,232 INFO Successfully subscribed to topic room_participants:20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:29:10,232 INFO Starting ExecutionContext for room: 20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:29:10,238 INFO Successfully subscribed to topic room_participants:6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:29:10,238 INFO Starting ExecutionContext for room: 6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:29:10,242 INFO Successfully subscribed to topic room_participants:0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:29:10,242 INFO Starting ExecutionContext for room: 0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:29:10,243 INFO Subscribed to 6 rooms during startup
+2026-06-14 08:29:10,243 INFO RoomPresence started for agent eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:29:10,243 INFO Platform runtime started for agent: Coder
+2026-06-14 08:29:10,243 INFO Agent started: Coder (band-sdk 1.0.0)
+2026-06-14 08:29:10,494 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages?status=processing&page=1 "HTTP/1.1 200 OK"
+2026-06-14 08:29:10,515 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages?status=processing&page=1 "HTTP/1.1 200 OK"
+2026-06-14 08:29:10,527 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages?status=processing&page=1 "HTTP/1.1 200 OK"
+2026-06-14 08:29:10,555 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages?status=processing&page=1 "HTTP/1.1 200 OK"
+2026-06-14 08:29:10,566 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages?status=processing&page=1 "HTTP/1.1 200 OK"
+2026-06-14 08:29:10,599 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages?status=processing&page=1 "HTTP/1.1 200 OK"
+2026-06-14 08:29:10,759 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:10,759 INFO ExecutionContext 48489c28-6c2c-4506-82b2-bd1316378f21: Synchronized, switching to WebSocket
+2026-06-14 08:29:10,760 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:10,760 INFO ExecutionContext 7a46febd-b116-4cb8-a152-79ea609b8176: Synchronized, switching to WebSocket
+2026-06-14 08:29:10,799 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:10,799 INFO ExecutionContext 0d662148-934b-4358-9cd8-c739962598bd: Synchronized, switching to WebSocket
+2026-06-14 08:29:10,824 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:10,824 INFO ExecutionContext 20b2d367-8929-438b-9eb6-0ec9dd15f074: Synchronized, switching to WebSocket
+2026-06-14 08:29:10,832 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:10,833 INFO ExecutionContext 6a21ff10-4161-4e1b-ae27-77c524b66728: Synchronized, switching to WebSocket
+2026-06-14 08:29:10,892 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:10,892 INFO ExecutionContext 0a8b4fde-454f-49b4-b3d1-9e957231fa21: Synchronized, switching to WebSocket
+2026-06-14 08:29:14,127 INFO [WebSocket] Subscribing to topic: chat_room:24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:29:14,360 INFO Successfully subscribed to topic chat_room:24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:29:14,360 INFO [WebSocket] Subscribing to topic: room_participants:24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:29:14,592 INFO Successfully subscribed to topic room_participants:24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:29:14,592 INFO Starting ExecutionContext for room: 24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:29:14,592 INFO Agent joined room: 24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:29:14,835 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages?status=processing&page=1 "HTTP/1.1 200 OK"
+2026-06-14 08:29:15,079 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:15,079 INFO ExecutionContext 24a3efc7-9bf2-4aab-8ae4-850f6a50d224: Synchronized, switching to WebSocket
+2026-06-14 08:29:15,342 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/participants "HTTP/1.1 200 OK"
+2026-06-14 08:29:15,626 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/context "HTTP/1.1 200 OK"
+2026-06-14 08:29:26,054 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:26,064 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:26,118 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:26,123 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:26,129 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:26,180 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:30,896 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:41,341 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:41,348 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:41,402 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:41,418 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:41,425 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:41,476 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:46,171 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:56,623 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:56,631 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:56,670 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:56,695 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:56,702 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:29:56,765 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:01,439 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:11,938 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:11,950 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:11,958 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:11,976 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:11,987 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:12,062 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:16,688 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:27,262 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:27,262 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:27,265 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:27,280 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:27,287 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:27,372 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:31,936 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:42,532 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/48489c28-6c2c-4506-82b2-bd1316378f21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:42,568 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0d662148-934b-4358-9cd8-c739962598bd/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:42,575 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/7a46febd-b116-4cb8-a152-79ea609b8176/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:42,600 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/20b2d367-8929-438b-9eb6-0ec9dd15f074/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:42,611 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/6a21ff10-4161-4e1b-ae27-77c524b66728/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:42,693 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/0a8b4fde-454f-49b4-b3d1-9e957231fa21/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:47,184 INFO HTTP Request: GET https://app.band.ai/api/v1/agent/chats/24a3efc7-9bf2-4aab-8ae4-850f6a50d224/messages/next "HTTP/1.1 204 No Content"
+2026-06-14 08:30:48,560 INFO Event loop shutting down! reason=Signal received
+2026-06-14 08:30:48,560 INFO Unregistered topic agent_control:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:30:48,560 INFO Unregistered topic agent_rooms:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:30:48,560 INFO Unregistered topic chat_room:48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:30:48,560 INFO Unregistered topic chat_room:7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:30:48,560 INFO Unregistered topic chat_room:0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:30:48,560 INFO Unregistered topic chat_room:20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:30:48,560 INFO Unregistered topic chat_room:6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:30:48,560 INFO Unregistered topic chat_room:0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:30:48,560 INFO Unregistered topic room_participants:48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:30:48,560 INFO Unregistered topic room_participants:7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:30:48,560 INFO Unregistered topic room_participants:0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:30:48,560 INFO Unregistered topic room_participants:20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:30:48,560 INFO Unregistered topic room_participants:6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:30:48,560 INFO Unregistered topic room_participants:0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:30:48,560 INFO Unregistered topic chat_room:24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:30:48,560 INFO Unregistered topic room_participants:24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:30:48,791 INFO Stopping AgentRuntime for agent eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:30:48,791 INFO Stopping ExecutionContext for room: 48489c28-6c2c-4506-82b2-bd1316378f21
+2026-06-14 08:30:48,791 INFO Stopping ExecutionContext for room: 7a46febd-b116-4cb8-a152-79ea609b8176
+2026-06-14 08:30:48,791 INFO Stopping ExecutionContext for room: 0d662148-934b-4358-9cd8-c739962598bd
+2026-06-14 08:30:48,791 INFO Stopping ExecutionContext for room: 20b2d367-8929-438b-9eb6-0ec9dd15f074
+2026-06-14 08:30:48,791 INFO Stopping ExecutionContext for room: 6a21ff10-4161-4e1b-ae27-77c524b66728
+2026-06-14 08:30:48,791 INFO Stopping ExecutionContext for room: 0a8b4fde-454f-49b4-b3d1-9e957231fa21
+2026-06-14 08:30:48,791 INFO Stopping ExecutionContext for room: 24a3efc7-9bf2-4aab-8ae4-850f6a50d224
+2026-06-14 08:30:48,791 INFO RoomPresence stopped
+2026-06-14 08:30:48,791 INFO [WebSocket] Unsubscribing from topic: agent_control:eb985017-adb4-4a87-a764-daff6fcdec05
+2026-06-14 08:30:48,791 WARNING Error unsubscribing from agent_control: Topic agent_control:eb985017-adb4-4a87-a764-daff6fcdec05 not subscribed
+2026-06-14 08:30:48,791 INFO Disconnected from platform
+2026-06-14 08:30:48,791 INFO Platform runtime stopped
+2026-06-14 08:30:48,791 INFO Agent stopped: Coder (graceful=True)

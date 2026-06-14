@@ -7,6 +7,7 @@ inside make_llm based on LLM_PROVIDER.
 
 import asyncio
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -30,6 +31,21 @@ _AGENT_MAX_TOKENS = 2048
 # the join lands) the SDK recovers by re-polling /next every idle_resync_seconds. The 60s default is
 # slower than our per-problem patience, so shorten it: a missed @Spec then wakes within this window.
 _AGENT_IDLE_RESYNC = 15.0
+
+# Room subscription: the SDK only subscribes to a per-problem room when the RoomAddedEvent push
+# lands, and an agent that misses that push never creates an execution context, so idle_resync (which
+# only re-polls /next for already-joined rooms) cannot recover it. With auto_subscribe_existing_rooms
+# the agent instead lists the rooms it already belongs to at startup and subscribes deterministically.
+# The demo launcher creates the room and adds the agents BEFORE starting them, then sets
+# QUARTET_AUTO_SUBSCRIBE=1 so each fresh agent joins reliably with no push race. The benchmark CLI
+# leaves it off (0) so a long-lived agent does not re-run every old room's pending mentions at start.
+_AUTO_SUBSCRIBE = os.environ.get("QUARTET_AUTO_SUBSCRIBE", "0") == "1"
+
+# With auto-subscribe on, a fresh agent also subscribes to every OTHER room it still belongs to and
+# would act on any stale @mention left in those rooms, polluting the current run's event stream.
+# QUARTET_ROOM_ID pins the agent to the one room the launcher created for this run; messages from any
+# other room are ignored (not run through the model, not posted).
+_TARGET_ROOM = os.environ.get("QUARTET_ROOM_ID") or None
 
 
 class _TokenCallback(BaseCallbackHandler):
@@ -74,6 +90,7 @@ class _TelemetryAdapter(LangGraphAdapter):
 
     def __init__(self, *args, role: str, **kwargs):
         self._role = role
+        self._joined_rooms: set[str] = set()
         super().__init__(*args, **kwargs)
 
     async def on_started(self, agent_name, agent_description):
@@ -81,6 +98,17 @@ class _TelemetryAdapter(LangGraphAdapter):
         return await super().on_started(agent_name, agent_description)
 
     async def on_message(self, msg, tools, history, participants_msg, contacts_msg, *, is_session_bootstrap, room_id):
+        # Ignore any room other than the one this run is pinned to (see _TARGET_ROOM). A fresh
+        # auto-subscribed agent would otherwise pick up stale @mentions from old rooms and emit
+        # events into this run's stream. Returning before super() means no model call and no post.
+        if _TARGET_ROOM and room_id and room_id != _TARGET_ROOM:
+            return None
+        # First message we handle for a room means the agent subscribed and woke. Emit a join signal
+        # so the stream proves the handoff reached this agent (the hop-1 stall showed up as the
+        # non-Spec agents never emitting this).
+        if room_id and room_id not in self._joined_rooms:
+            self._joined_rooms.add(room_id)
+            emit("room_joined", role=self._role, room_id=room_id)
         emit(
             "message_received", role=self._role, room_id=room_id,
             sender=msg.sender_name or msg.sender_id, preview=msg.content,
@@ -104,10 +132,12 @@ async def _serve(name: str, tools=None) -> None:
         adapter=adapter,
         agent_id=cfg["agent_id"],
         api_key=cfg["api_key"],
-        # Only handle rooms we are newly added to (per-problem rooms arrive via RoomAddedEvent).
-        # Without this the agent re-subscribes to every pre-existing room on startup and re-runs
-        # their unfinished @mentions, flooding the shared model and starving the current problem.
-        config=AgentConfig(auto_subscribe_existing_rooms=False),
+        # Per-problem rooms normally arrive via RoomAddedEvent. When the demo launcher pre-creates
+        # the room and adds the agent before starting it, QUARTET_AUTO_SUBSCRIBE=1 makes the agent
+        # subscribe to rooms it already belongs to at startup, joining deterministically with no push
+        # race. Off (the benchmark default) it would re-run every pre-existing room's pending
+        # @mentions on start, flooding the shared model and starving the current problem.
+        config=AgentConfig(auto_subscribe_existing_rooms=_AUTO_SUBSCRIBE),
         session_config=SessionConfig(idle_resync_seconds=_AGENT_IDLE_RESYNC),
     )
     logging.info("[%s] connected. Waiting for room messages...", name)
