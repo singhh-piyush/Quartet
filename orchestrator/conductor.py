@@ -1,15 +1,17 @@
 """Conductor: drives the Quartet over the benchmark through Band.
 
 The conductor is a scripted Agent-API client (a 5th "Conductor" agent), not an LLM agent. Per
-problem it opens a room, adds the four agents, posts the problem mentioning @Spec, then harvests
-the Repairer's terminal message (which @mentions the Conductor) from its own message queue and
-scores the harvested solution against the held-out official test. The agents never see the
-official test; the conductor holds it for scoring only.
+problem it opens a room, adds the four agents, posts the problem mentioning @Spec, then reads the
+room conversation via the agent context endpoint (logging a who-spoke-when trace) and harvests the
+Repairer's terminal message (FINAL_SOLUTION + block, or NO_SOLUTION) to score the solution against
+the held-out official test. The agents never see the official test; the conductor holds it for
+scoring only.
 
 The Human API is Enterprise-only and 403s on Pro, so everything here uses the agent_api_*
 resources, authenticated with the conductor's agent API key (sent as X-API-Key by RestClient).
 
-Run: uv run python -m orchestrator.conductor [--n N] [--timeout S] [--poll S] [--selftest]
+Run: uv run python -m orchestrator.conductor [--n N | --task ID] [--timeout S] [--poll S]
+     [--trace] [--out PATH] [--selftest]
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ import os
 import re
 import sys
 import time
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -33,8 +37,11 @@ from band.client.rest import (
     RestClient,
 )
 
+from bench.events import emit, read_events
 from bench.sandbox import run_tests
 from orchestrator.config import BAND_REST_URL, get_agent
+
+_MENTION = re.compile(r"@\[\[[^\]]+\]\]|@\w+")
 
 # Order matters: Spec is mentioned to start; the four are added as room participants.
 ROLES = ["spec", "coder", "tester", "repairer"]
@@ -72,6 +79,20 @@ def classify(text: str) -> tuple[str | None, str]:
     return None, ""
 
 
+def _mentions_conductor(msg, conductor_id: str) -> bool:
+    """True if a message addresses the Conductor: literal @Conductor, the normalized mention token
+    @[[<id>]], or the id in metadata. A terminal is accepted only when this holds, so a repair-round
+    message to @Coder that merely contains FINAL_SOLUTION/NO_SOLUTION is not harvested as the final
+    answer (a silent false-terminal would corrupt the score)."""
+    content = msg.content or ""
+    if re.search(r"@conductor\b", content, re.IGNORECASE):
+        return True
+    if conductor_id and f"@[[{conductor_id}]]" in content:
+        return True
+    meta = getattr(msg, "metadata", None)
+    return bool(conductor_id and meta and conductor_id in str(meta))
+
+
 def make_client() -> RestClient:
     """Build the Agent-API REST client authenticated as the Conductor agent. Never logs the key."""
     cfg = get_agent("conductor")
@@ -88,25 +109,67 @@ def _with_retry(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
 
-def _safe(fn, *args, **kwargs):
-    """Best-effort call; swallow and log any error (used for queue housekeeping)."""
-    try:
-        return fn(*args, **kwargs)
-    except Exception as e:  # noqa: BLE001 - housekeeping must not abort the run
-        logging.debug("ignored error in %s: %s", getattr(fn, "__name__", fn), e)
-        return None
-
-
 def _msg_ts(msg) -> float:
     ts = getattr(msg, "inserted_at", None)
     return ts.timestamp() if ts else 0.0
 
 
+def _iso_to_epoch(s: str | None) -> float | None:
+    try:
+        return datetime.fromisoformat(s).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def write_transcript(client: RestClient, room_id: str, task_id: str) -> None:
+    """Write the full room transcript (every message, full content) with run_tests tool calls
+    interleaved by timestamp to results/selftest/<task_id>_transcript.md. Local debug artifact."""
+    resp = _with_retry(client.agent_api_context.get_agent_chat_context, room_id, page_size=100)
+    msgs = sorted(resp.data, key=_msg_ts)
+    items: list[tuple[float, str, object]] = [(_msg_ts(m), "msg", m) for m in msgs]
+
+    # Interleave this run's run_tests tool_call events (they carry no room_id, so include any that
+    # land at or after the room's first message; for a single-problem trace this is exact).
+    lo = _msg_ts(msgs[0]) if msgs else 0.0
+    events_path = os.environ.get("QUARTET_EVENTS_PATH")
+    if events_path:
+        for ev in read_events(events_path):
+            if ev.get("type") != "tool_call":
+                continue
+            ts = _iso_to_epoch(ev.get("ts"))
+            if ts is not None and ts >= lo:
+                items.append((ts, "tool", ev))
+    items.sort(key=lambda x: x[0])
+
+    lines = [f"# Transcript: {task_id}", "", f"Room: `{room_id}`", ""]
+    for _ts, kind, obj in items:
+        if kind == "msg":
+            who = obj.sender_name or obj.sender_id
+            lines.append(f"### [{who}] ({obj.sender_type})")
+            lines.append("")
+            lines.append(obj.content or "")
+            lines.append("")
+        else:
+            r = obj.get("result", {})
+            lines.append(f"### run_tests (tool / {obj.get('role')})")
+            lines.append("")
+            lines.append(f"args: {obj.get('args_summary')}  ->  result: {r}  ({obj.get('duration_ms')}ms)")
+            lines.append("")
+
+    out = Path("results/selftest") / f"{task_id.replace('/', '_')}_transcript.md"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text("\n".join(lines))
+    logging.info("[%s] transcript -> %s", task_id, out)
+
+
 def open_room(client: RestClient, problem: dict, agent_ids: dict) -> str:
     """Create a room for the problem and add the four agents as participants."""
+    # Band's task_id must be a UUID for an existing task; the HumanEval id ("HumanEval/81") is
+    # neither, so we omit it (the request serializes to {}). The HumanEval id is kept only in our
+    # own results record and the posted problem text for traceability.
     resp = _with_retry(
         client.agent_api_chats.create_agent_chat,
-        chat=ChatRoomRequest(task_id=problem["task_id"]),
+        chat=ChatRoomRequest(),
     )
     room_id = resp.data.id
     for role in ROLES:
@@ -121,7 +184,10 @@ def open_room(client: RestClient, problem: dict, agent_ids: dict) -> str:
 
 def post_problem(client: RestClient, room_id: str, problem: dict, spec_id: str) -> None:
     """Post the problem to the room, mentioning @Spec to start the chain."""
-    content = f"@Spec solve this so it passes the hidden tests.\n\n{problem['prompt']}"
+    content = (
+        f"@Spec problem {problem['task_id']}: solve this so it passes the hidden tests.\n\n"
+        f"{problem['prompt']}"
+    )
     _with_retry(
         client.agent_api_messages.create_agent_chat_message,
         room_id,
@@ -130,40 +196,77 @@ def post_problem(client: RestClient, room_id: str, problem: dict, spec_id: str) 
             mentions=[ChatMessageRequestMentionsItem(id=spec_id, name="Spec")],
         ),
     )
+    emit("message_posted", role="conductor", room_id=room_id, task_id=problem["task_id"],
+         preview=content, mentions=["Spec"])
     logging.info("[%s] posted problem, mentioned @Spec", problem["task_id"])
 
 
-def harvest(client: RestClient, room_id: str, repairer_id: str, deadline: float, poll: float):
-    """Poll the conductor's own queue until the Repairer's terminal message or the deadline.
+def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: str, deadline: float, poll: float, task_id: str | None = None):
+    """Poll the room conversation until the Repairer's terminal message or the deadline.
 
-    Returns ('FINAL_SOLUTION', code) | ('NO_SOLUTION', '') | ('TIMEOUT', '').
+    Reads the whole room via the agent context endpoint (not the conductor's inbox), so every new
+    message is logged as a who-spoke-when trace and the terminal is detected even when nothing is
+    routed to the conductor's inbox. A Repairer message is terminal only when it also mentions the
+    Conductor, so a repair-round message is never harvested by mistake. Each newly observed message
+    emits a message_posted event (this is how the agents' posts reach the event stream). Returns
+    ('FINAL_SOLUTION', code) | ('NO_SOLUTION', '') | ('TIMEOUT', '').
     """
     seen: set[str] = set()
+    start = time.monotonic()
+    last_beat = start
     while time.monotonic() < deadline:
-        resp = _with_retry(client.agent_api_messages.list_agent_messages, room_id, status="pending")
+        resp = _with_retry(client.agent_api_context.get_agent_chat_context, room_id, page_size=100)
+        saw_new = False
         for msg in sorted(resp.data, key=_msg_ts):
             if msg.id in seen:
                 continue
             seen.add(msg.id)
+            saw_new = True
+            who = msg.sender_name or msg.sender_id
+            snippet = " ".join(msg.content.split())[:140]
+            logging.info("    %s (%s): %s", who, msg.sender_type, snippet)
+            # Record every agent post in the event stream (the conductor's own post is already
+            # emitted in post_problem, so skip it here to avoid a duplicate).
+            if msg.sender_id != conductor_id:
+                emit("message_posted", role=(msg.sender_name or msg.sender_id or "unknown").lower(),
+                     room_id=room_id, task_id=task_id, preview=msg.content or "",
+                     mentions=_MENTION.findall(msg.content or ""))
             from_repairer = msg.sender_id == repairer_id or (msg.sender_name or "").lower() == "repairer"
-            status, solution = classify(msg.content) if from_repairer else (None, "")
-            # Consume the message from our queue (best-effort) so it does not reappear.
-            _safe(client.agent_api_messages.mark_agent_message_processed, room_id, msg.id)
-            if status:
-                return status, solution
+            if from_repairer:
+                status, solution = classify(msg.content)
+                if status and not _mentions_conductor(msg, conductor_id):
+                    logging.info("    (ignoring Repairer %s without @Conductor mention)", status)
+                    continue
+                if status:
+                    emit("terminal_emitted", role="conductor", room_id=room_id, task_id=task_id,
+                         kind=status, mentions_conductor=True)
+                    return status, solution
+        now = time.monotonic()
+        if saw_new:
+            last_beat = now
+        elif now - last_beat >= 30:
+            logging.info("    ...waiting for agents (%ds elapsed, %d message(s) seen)", int(now - start), len(seen))
+            last_beat = now
         time.sleep(poll)
     return "TIMEOUT", ""
 
 
-def run_problem(client: RestClient, problem: dict, agent_ids: dict, timeout: float, poll: float) -> dict:
+def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id: str, timeout: float, poll: float, settle: float, trace: bool = False) -> dict:
     """Drive one problem end to end and score the harvested solution against the official test."""
     start = time.monotonic()
+    task_id = problem["task_id"]
     room_id = open_room(client, problem, agent_ids)
+    # Let the just-added agents receive the room-added event and subscribe before we post, so the
+    # first message is not pushed before Spec is listening. A missed push still self-heals via the
+    # agents' idle resync, but settling here avoids the wait in the common case.
+    if settle > 0:
+        logging.info("[%s] waiting %.0fs for agents to join the room...", task_id, settle)
+        time.sleep(settle)
     post_problem(client, room_id, problem, agent_ids["spec"])
-    status, solution = harvest(client, room_id, agent_ids["repairer"], time.monotonic() + timeout, poll)
+    status, solution = harvest(client, room_id, agent_ids["repairer"], conductor_id, time.monotonic() + timeout, poll, task_id)
 
     record = {
-        "task_id": problem["task_id"],
+        "task_id": task_id,
         "room_id": room_id,
         "status": status,
         "passed": False,
@@ -181,25 +284,46 @@ def run_problem(client: RestClient, problem: dict, agent_ids: dict, timeout: flo
     else:  # TIMEOUT
         record["error"] = f"no terminal message within {timeout:.0f}s"
 
+    emit("scored", role="conductor", room_id=room_id, task_id=task_id, passed=record["passed"], status=status)
+    if trace:
+        try:
+            write_transcript(client, room_id, task_id)
+        except Exception as e:  # noqa: BLE001 - a transcript failure must not sink the run
+            logging.warning("[%s] transcript failed: %s", task_id, e)
+
     logging.info(
         "[%s] %s passed=%s (%.1fs)",
-        problem["task_id"], status, record["passed"], time.monotonic() - start,
+        task_id, status, record["passed"], time.monotonic() - start,
     )
     return record
 
 
-def run_benchmark(n: int, timeout: float, poll: float, out_path: str) -> dict:
-    """Run the Quartet over n problems through Band and save results/quartet_local.json."""
-    from bench.dataset import get_problems
+def _ensure_run_env() -> str:
+    """Ensure QUARTET_RUN_ID / QUARTET_EVENTS_PATH are set so the conductor's events are recorded.
 
-    problems = get_problems(n)
+    Under the self-test runner these are already exported (shared with the agents) and left as-is;
+    standalone, the conductor mints its own run so it still logs its own side of the stream.
+    """
+    if not os.environ.get("QUARTET_EVENTS_PATH"):
+        run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
+        os.environ["QUARTET_RUN_ID"] = run_id
+        os.environ["QUARTET_EVENTS_PATH"] = f"results/events/{run_id}.jsonl"
+    Path(os.environ["QUARTET_EVENTS_PATH"]).parent.mkdir(parents=True, exist_ok=True)
+    logging.info("events -> %s", os.environ["QUARTET_EVENTS_PATH"])
+    return os.environ["QUARTET_EVENTS_PATH"]
+
+
+def run_benchmark(problems: list[dict], timeout: float, poll: float, settle: float, out_path: str, trace: bool = False) -> dict:
+    """Run the Quartet over the given problems through Band and save the results JSON."""
+    _ensure_run_env()
     agent_ids = {role: get_agent(role)["agent_id"] for role in ROLES}
+    conductor_id = get_agent("conductor")["agent_id"]
     client = make_client()
 
     results = []
     for problem in problems:
         try:
-            results.append(run_problem(client, problem, agent_ids, timeout, poll))
+            results.append(run_problem(client, problem, agent_ids, conductor_id, timeout, poll, settle, trace))
         except Exception as e:  # noqa: BLE001 - one bad room must not sink the benchmark
             logging.error("[%s] conductor error: %s", problem["task_id"], e)
             results.append({
@@ -260,26 +384,54 @@ def _selftest() -> bool:
             extra = f" scored_passed={res['passed']}"
         print(f"{'OK  ' if good_case else 'FAIL'} {name}: status={status} (want {want_status}){extra}")
         ok = ok and good_case
+
+    # #11: a terminal is harvested only when it also mentions the Conductor.
+    cid = "cond-123"
+
+    class _M:  # minimal ChatMessage stand-in for the mention gate
+        def __init__(self, content):
+            self.content = content
+            self.metadata = None
+
+    mention_cases = [
+        ("literal @Conductor", _M("@Conductor\nFINAL_SOLUTION\n```python\nx\n```"), True),
+        ("normalized token", _M(f"@[[{cid}]] FINAL_SOLUTION"), True),
+        ("no mention (repair-round bleed)", _M("FINAL_SOLUTION\n```python\nx\n```"), False),
+    ]
+    for name, m, want in mention_cases:
+        got = _mentions_conductor(m, cid)
+        good_case = got == want
+        print(f"{'OK  ' if good_case else 'FAIL'} mention/{name}: {got} (want {want})")
+        ok = ok and good_case
     return ok
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Drive the Quartet over HumanEval through Band (Agent API).")
     ap.add_argument("--n", type=int, default=3, help="number of problems (default 3, dry run)")
+    ap.add_argument("--task", help="run a single HumanEval task by id (e.g. HumanEval/0); overrides --n")
     ap.add_argument("--timeout", type=float, default=180.0, help="per-problem timeout in seconds")
     ap.add_argument("--poll", type=float, default=2.0, help="harvest poll interval in seconds")
+    ap.add_argument("--settle", type=float, default=2.0, help="delay after adding agents before posting")
+    ap.add_argument("--trace", action="store_true", help="write the full room transcript per problem")
     ap.add_argument("--out", default=_DEFAULT_OUT, help=f"results path (default {_DEFAULT_OUT})")
     ap.add_argument("--selftest", action="store_true", help="offline parse+score check, no Band")
     args = ap.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    # Keep the room trace readable: silence per-request HTTP and dataset-download chatter.
+    for noisy in ("httpx", "httpcore", "datasets", "huggingface_hub", "urllib3", "fsspec"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
 
     if args.selftest:
         ok = _selftest()
         print("\nselftest:", "PASS" if ok else "FAIL")
         sys.exit(0 if ok else 1)
 
-    run_benchmark(args.n, args.timeout, args.poll, args.out)
+    from bench.dataset import get_problem, get_problems
+
+    problems = [get_problem(args.task)] if args.task else get_problems(args.n)
+    run_benchmark(problems, args.timeout, args.poll, args.settle, args.out, args.trace)
 
 
 if __name__ == "__main__":
