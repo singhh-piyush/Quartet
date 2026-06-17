@@ -84,8 +84,8 @@ export default function App() {
         : "recorded";
 
   return (
-    <div className="flex min-h-full flex-col px-6 py-5 sm:px-8 lg:px-10">
-      <header className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-5">
+    <div className="flex h-full flex-col overflow-hidden px-6 py-5 sm:px-8 lg:px-10">
+      <header className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-4">
         <div className="flex items-center gap-4">
           <Glyph />
           <div>
@@ -121,25 +121,25 @@ export default function App() {
         </div>
       </header>
 
-      <main className="flex-1">
-        <div key={view} className="view-enter">
+      <main className="min-h-0 flex-1">
+        <div key={view} className="view-enter h-full min-h-0">
           {view === "room" ? (
             <RoomView
               room={room}
               transcript={transcript}
               controls={controls}
               error={mode === "live" ? live.error : player.error}
-              animate={true}
+              live={mode === "live"}
             />
-          ) : view === "results" ? (
-            <ResultsView animate={true} />
           ) : (
-            <CompareView animate={true} />
+            <div className="h-full overflow-y-auto">
+              {view === "results" ? <ResultsView animate={true} /> : <CompareView animate={true} />}
+            </div>
           )}
         </div>
       </main>
 
-      <footer className="mt-8 flex items-center justify-between border-t border-[var(--line)] pt-4 font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)]">
+      <footer className="mt-4 flex shrink-0 items-center justify-between border-t border-[var(--line)] pt-3 font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)]">
         <span>
           {mode === "live"
             ? liveRunId

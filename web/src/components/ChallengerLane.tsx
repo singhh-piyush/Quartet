@@ -79,10 +79,10 @@ export function ChallengerLane({ room }: { room: RoomState }) {
       : null;
 
   return (
-    <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-      <div className="mb-3 flex items-baseline justify-between">
+    <section className="rounded-xl panel-raised p-3.5">
+      <div className="mb-2.5 flex items-baseline justify-between">
         <span className="font-mono text-[12px] uppercase tracking-[0.22em] text-[var(--text-3)]">live race</span>
-        <span className="font-mono text-[11px] text-[var(--text-3)]">one large model vs the Quartet, same problem</span>
+        <span className="font-mono text-[11px] text-[var(--text-3)]">one large vs the Quartet</span>
       </div>
       <div className="flex items-stretch gap-3">
         <Side title="Quartet" sub={quartetModel} tokens={room.totalTokens} color={configColor.quartet} lane={q} />
