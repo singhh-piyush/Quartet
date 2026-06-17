@@ -45,8 +45,10 @@ export function RoomView({
         </div>
       )}
 
-      {/* signal path: Spec -> Coder -> Tester -> Repairer, with the flow overlay between stations */}
-      <div ref={railRef} className="relative grid grid-cols-2 gap-3 md:flex md:items-stretch md:gap-6">
+      {/* signal path: Spec -> Coder -> Tester -> Repairer, with the flow overlay between stations.
+          A uniform grid (equal columns, equal rows via auto-rows-fr) keeps every card identical at
+          any width; the SVG flow overlay shows at md+ where the four cards sit on one row. */}
+      <div ref={railRef} className="relative grid grid-cols-2 gap-3 [grid-auto-rows:1fr] md:grid-cols-4 md:gap-5">
         <SignalFlow
           rects={rects}
           containerWidth={containerWidth}

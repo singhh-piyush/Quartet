@@ -55,9 +55,11 @@ export function useCardRects(
       }
       setState({
         rects: out as Record<Role, CardRect>,
-        // scrollWidth covers the full flex row even if it overflows
-        containerWidth: container.scrollWidth,
-        containerHeight: cb.height,
+        // Use the client box (what `absolute inset-0` fills) so 1 SVG unit == 1px with no viewBox
+        // scaling. scrollWidth would diverge from the rendered SVG size under any overflow and shift
+        // every drawn coordinate.
+        containerWidth: container.clientWidth,
+        containerHeight: container.clientHeight,
       });
     }
 

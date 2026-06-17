@@ -43,6 +43,27 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
+def aimlapi_key() -> str | None:
+    """The aimlapi inference key. Looked up in order: AIML_API_KEY env / .env, then agent_config.yaml
+    so all credentials can live in one file if preferred. Accepts a top-level `aiml_api_key:` or a
+    nested `providers: {aimlapi: {api_key: ...}}`. This is the LLM key, distinct from the per-agent
+    `band_*` keys (which authenticate the Band chat room, not model inference)."""
+    env = os.environ.get("AIML_API_KEY")
+    if env:
+        return env
+    # Read fresh (not the lru_cached _load_config) so a key added to agent_config.yaml while the
+    # demo server is running is picked up on the next run without a restart.
+    try:
+        with open(_CONFIG_PATH) as f:
+            cfg = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        return None
+    key = cfg.get("aiml_api_key") or cfg.get("aimlapi_api_key")
+    if not key:
+        key = ((cfg.get("providers") or {}).get("aimlapi") or {}).get("api_key")
+    return key or None
+
+
 def get_agent(name: str) -> dict:
     """Return the agent block (agent_id, api_key) for the given agent name."""
     cfg = _load_config()
@@ -71,9 +92,12 @@ def make_llm(role: str | None = None, *, model: str | None = None, **kwargs) -> 
         )
 
     if provider == "aimlapi":
-        api_key = os.environ.get("AIML_API_KEY")
+        api_key = aimlapi_key()
         if not api_key:
-            raise RuntimeError("AIML_API_KEY not set in environment")
+            raise RuntimeError(
+                "no aimlapi key found. Set AIML_API_KEY in .env, or add `aiml_api_key: <key>` to "
+                "agent_config.yaml. Note: this must be an aimlapi inference key, not a band_ chat key."
+            )
         resolved = (
             model
             or (os.environ.get(f"{role.upper()}_MODEL") if role else None)

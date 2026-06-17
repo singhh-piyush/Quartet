@@ -32,7 +32,7 @@ export const AgentCard = forwardRef<HTMLDivElement, AgentCardProps>(
       <div
         ref={ref}
         onClick={onSelect}
-        className={`${animate ? "animate-stationIn" : ""} ${onSelect ? "cursor-pointer" : ""} relative flex flex-1 flex-col rounded-lg border bg-[var(--panel)] px-4 py-3.5 transition-all duration-500 ease-spring`}
+        className={`${animate ? "animate-stationIn" : ""} ${onSelect ? "cursor-pointer" : ""} relative flex h-full min-h-[150px] flex-col rounded-lg border bg-[var(--panel)] px-4 py-3.5 transition-all duration-500 ease-spring`}
         style={{
           animationDelay: animate ? `${index * 90}ms` : undefined,
           borderColor: ring,
@@ -61,31 +61,35 @@ export const AgentCard = forwardRef<HTMLDivElement, AgentCardProps>(
             {meta.label}
           </div>
           <div className="mt-1 text-[13px] text-[var(--text-3)]">{meta.sub}</div>
-          {state.model && (
-            <div className="mt-1.5 truncate font-mono text-[11px] text-[var(--text-2)]" title={state.model}>
-              {shortModel(state.model)}
-            </div>
-          )}
+          <div
+            className="mt-1.5 truncate font-mono text-[11px] text-[var(--text-2)]"
+            title={state.model || "model assigned at run start"}
+          >
+            {state.model ? shortModel(state.model) : "model pending"}
+          </div>
         </div>
 
-        <div
-          className="mt-3 inline-flex w-fit items-center gap-1.5 rounded px-2 py-1 font-mono text-[12px] font-semibold tracking-wider"
-          style={{
-            color: live ? meta.color : "#52525b",
-            background: live ? `${meta.color}14` : "rgba(255,255,255,0.03)",
-          }}
-        >
-          <span
-            className="h-1.5 w-1.5 rounded-full"
-            style={{ background: live ? meta.color : "#52525b" }}
-          />
-          {phaseLabel[state.phase]}
-        </div>
+        {/* phase + readouts are pinned to the bottom so they line up across every card */}
+        <div className="mt-auto pt-3">
+          <div
+            className="inline-flex w-fit items-center gap-1.5 rounded px-2 py-1 font-mono text-[12px] font-semibold tracking-wider"
+            style={{
+              color: live ? meta.color : "#52525b",
+              background: live ? `${meta.color}14` : "rgba(255,255,255,0.03)",
+            }}
+          >
+            <span
+              className="h-1.5 w-1.5 rounded-full"
+              style={{ background: live ? meta.color : "#52525b" }}
+            />
+            {phaseLabel[state.phase]}
+          </div>
 
-        <div className="mt-3.5 grid grid-cols-3 gap-1.5 font-mono">
-          <Readout label="llm" value={state.llmCalls} />
-          <Readout label="tokens" value={fmtInt(state.tokens)} accent={meta.color} />
-          <Readout label="posts" value={state.posts} />
+          <div className="mt-3 grid grid-cols-3 gap-1.5 font-mono">
+            <Readout label="llm" value={state.llmCalls} />
+            <Readout label="tokens" value={fmtInt(state.tokens)} accent={meta.color} />
+            <Readout label="posts" value={state.posts} />
+          </div>
         </div>
       </div>
     );

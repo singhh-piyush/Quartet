@@ -1,0 +1,3 @@
+{"ts": "2026-06-16T20:44:54.245907+00:00", "run_id": "20260616T204451-bandtest", "room_id": null, "task_id": null, "role": "spec", "type": "agent_connected"}
+{"ts": "2026-06-16T20:44:58.362754+00:00", "run_id": "20260616T204451-bandtest", "room_id": "1dda7395-8e6c-47cf-a068-98591356f671", "task_id": null, "role": "spec", "type": "room_joined"}
+{"ts": "2026-06-16T20:44:58.362796+00:00", "run_id": "20260616T204451-bandtest", "room_id": "1dda7395-8e6c-47cf-a068-98591356f671", "task_id": null, "role": "spec", "type": "message_received", "sender": "Conductor", "preview": "@[[2d92dda2-975b-4ff5-90f0-73dc6c7d36d1]] ping: are you receiving on Band?"}

@@ -76,6 +76,22 @@ def _read_json(path: Path):
         return None
 
 
+def _read_messages_jsonl(path: Path) -> list[dict]:
+    """Read a per-run agent message log (full bodies the agents append, one JSON per line)."""
+    out: list[dict] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except FileNotFoundError:
+        pass
+    return out
+
+
 # ---- /api/runs -------------------------------------------------------------------------------
 
 def list_runs() -> list[dict]:
@@ -185,6 +201,13 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             return {}
 
+    def _local_host(self) -> bool:
+        """The control plane can spawn processes, so only accept it from a localhost Host header.
+        This blocks DNS-rebinding: a remote page that resolves a name to 127.0.0.1 still sends its
+        own Host, which is rejected. The server already binds 127.0.0.1, so this is defence in depth."""
+        host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
+        return host in ("127.0.0.1", "localhost", "[::1]", "::1", "")
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -211,6 +234,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
+        if not self._local_host():
+            self._send_json({"error": "forbidden"}, status=403)
+            return
         try:
             if path == "/api/run":
                 task_id = (self._read_body() or {}).get("task_id")
@@ -246,11 +272,27 @@ class Handler(BaseHTTPRequestHandler):
         if not _RUN_ID_OK.match(run_id):
             self._send_json({"error": "bad run_id"}, status=400)
             return
-        data = _read_json(TRANSCRIPTS_DIR / f"{run_id}.json")
-        if data is None:
+        base = _read_json(TRANSCRIPTS_DIR / f"{run_id}.json") or {}
+        # The agents log the real Spec->Coder->Tester->Repairer handoffs (the inbox-scoped conductor
+        # cannot see them). Merge those with the conductor's own message(s) for a live run; for a
+        # recorded/golden run there is no agent log, so use the bundled .json as-is.
+        agent_msgs = _read_messages_jsonl(TRANSCRIPTS_DIR / f"{run_id}.messages.jsonl")
+        if agent_msgs:
+            messages = [m for m in base.get("messages", []) if m.get("role") == "conductor"] + agent_msgs
+            messages.sort(key=lambda m: m.get("ts") or "")
+        else:
+            messages = base.get("messages", [])
+        if not messages and not base:
             self._send_json({"run_id": run_id, "messages": [], "missing": True})
             return
-        self._send_json(data)
+        self._send_json({
+            "run_id": run_id,
+            "task_id": base.get("task_id"),
+            "room_id": base.get("room_id"),
+            "prompt": base.get("prompt", ""),
+            "final_solution": base.get("final_solution", ""),
+            "messages": messages,
+        })
 
     # ---- SSE ----
 
@@ -305,38 +347,44 @@ class Handler(BaseHTTPRequestHandler):
         self._sse({}, event="end")
 
     def _stream_live(self, path: Path):
-        self._sse({"run_id": path.stem, "mode": "live"}, event="start")
+        run_id = path.stem
+        self._sse({"run_id": run_id, "mode": "live"}, event="start")
         pos = 0
         buf = ""
         idle = 0.0
-        while idle < 900:  # give up after 15 min of no new data
+        while idle < 300:  # give up after 5 min of no new data (a single problem ends well before)
+            new = ""
             if path.exists():
                 with open(path, encoding="utf-8") as f:
                     f.seek(pos)
                     new = f.read()
                     pos = f.tell()
-                if new:
-                    idle = 0.0
-                    buf += new
-                    *lines, buf = buf.split("\n")
-                    for line in lines:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            ev = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
-                        self._sse(ev)
-                        # The challenger emits its own scored event; the run ends only when the
-                        # conductor scores the Quartet (pass, fail, or timeout all reach here).
-                        if ev.get("type") == "scored" and ev.get("role") == "conductor":
-                            self._sse({}, event="end")
-                            return
-                else:
-                    idle += _LIVE_POLL
+            if new:
+                idle = 0.0
+                buf += new
+                *lines, buf = buf.split("\n")
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    self._sse(ev)
+                    # The challenger emits its own scored event; the run ends only when the
+                    # conductor scores the Quartet (pass, fail, or timeout all reach here).
+                    if ev.get("type") == "scored" and ev.get("role") == "conductor":
+                        self._sse({}, event="end")
+                        return
             else:
                 idle += _LIVE_POLL
+                # End promptly if this run reached a terminal state without a conductor scored event
+                # (e.g. it failed config preflight and wrote no events), instead of idling for minutes.
+                st = RUNS.status()
+                if st.get("run_id") == run_id and not st.get("active") and st.get("status") in ("error", "stopped", "done"):
+                    self._sse({"status": st.get("status"), "error": st.get("error")}, event="end")
+                    return
             self._sse({}, event="ping")
             time.sleep(_LIVE_POLL)
         self._sse({}, event="end")

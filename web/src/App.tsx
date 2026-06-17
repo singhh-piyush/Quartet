@@ -44,7 +44,9 @@ export default function App() {
   const room = mode === "live" ? live.room : player.room;
   const transcriptRunId = mode === "live" ? liveRunId : replayRunId;
   const transcriptKey = mode === "live" ? live.done : player.cursor >= player.total;
-  const { transcript } = useTranscript(transcriptRunId, transcriptKey);
+  // While a live run is streaming, poll the transcript so reasoning fills in as agents speak.
+  const pollTranscript = mode === "live" && !!liveRunId && !live.done;
+  const { transcript } = useTranscript(transcriptRunId, transcriptKey, pollTranscript);
 
   const onRun = async (taskId: string) => {
     try {

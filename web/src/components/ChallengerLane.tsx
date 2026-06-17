@@ -58,7 +58,12 @@ function Side({
 }
 
 export function ChallengerLane({ room }: { room: RoomState }) {
-  const q: Lane = { passed: room.finished ? room.verdict === "pass" : null, active: !room.finished, started: true };
+  const running = room.activeRole !== null || room.totalTokens > 0;
+  const q: Lane = {
+    passed: room.finished ? room.verdict === "pass" : null,
+    active: running && !room.finished,
+    started: running || room.finished,
+  };
   const c: Lane = {
     passed: room.challenger.verdict === null ? null : room.challenger.verdict === "pass",
     active: room.challenger.active,

@@ -4,31 +4,47 @@ import type { FlowSegment } from "../useFlowState";
 import type { CardRect } from "../useCardRects";
 import type { Role } from "../types";
 
-// Calm instrument signal: a dim always-on rail Spec -> Coder -> Tester -> Repairer, and on each
-// handoff one soft glowing packet that eases along the segment leaving a short trail, while the
-// source card edge dims and the destination edge lights. Forward flow uses the source colour; a
-// repair bounce arcs back below the row in fail-red.
-const TRAIL = 26;       // length of the bright comet dash (svg units)
-const CORE_W = 2;       // bright core stroke width
-const GLOW_W = 7;       // soft aura stroke width
-const HEAD_R = 4;       // glowing packet radius
-const ARC_DIP = 52;     // repair arc depth below the row
-const DURATION = 1100;  // ms for one packet to travel a segment
+// The handoff animation is integrated into the cards themselves: a glowing current enters the source
+// card and runs ALONG its border, merges into the connector line in the gap, then runs along the next
+// card's border - lighting up part of each shape as it flows through. Nothing flies around; the
+// brightness travels through the existing outlines (composited with `screen` so it adds light over the
+// real card borders on black). Forward flow runs across the tops in the source colour; a repair bounce
+// runs across the bottoms in fail-red.
+const RAD = 8; // card corner radius (matches rounded-lg)
+const DASH = 96; // length of the bright flowing segment that travels the border path
+const CORE_W = 2.25;
+const GLOW_W = 9;
+const DURATION = 1600;
 
-// Ease in-out cubic: gentle start and stop so it reads as a transfer, not a streak.
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const midY = (r: CardRect) => r.y + r.height / 2;
 
+// Top border, left-middle -> over the top -> right-middle (left to right). `move` starts a new subpath.
+function topArcLTR(r: CardRect, move: boolean): string {
+  const { x, y, width: w, height: h } = r;
+  const rad = Math.min(RAD, h / 2, w / 2);
+  return (
+    `${move ? "M" : "L"} ${x} ${y + h / 2} L ${x} ${y + rad} Q ${x} ${y} ${x + rad} ${y} ` +
+    `L ${x + w - rad} ${y} Q ${x + w} ${y} ${x + w} ${y + rad} L ${x + w} ${y + h / 2}`
+  );
+}
+
+// Bottom border, right-middle -> under the bottom -> left-middle (right to left), for the repair bounce.
+function bottomArcRTL(r: CardRect, move: boolean): string {
+  const { x, y, width: w, height: h } = r;
+  const rad = Math.min(RAD, h / 2, w / 2);
+  return (
+    `${move ? "M" : "L"} ${x + w} ${y + h / 2} L ${x + w} ${y + h - rad} Q ${x + w} ${y + h} ${x + w - rad} ${y + h} ` +
+    `L ${x + rad} ${y + h} Q ${x} ${y + h} ${x} ${y + h - rad} L ${x} ${y + h / 2}`
+  );
+}
+
+// Source border -> (connector, drawn implicitly by the junction line) -> destination border.
 function segPath(seg: FlowSegment, rects: Record<Role, CardRect>): string {
   const fr = rects[seg.from];
   const tr = rects[seg.to];
-  if (seg.mode === "forward") {
-    return `M ${fr.x + fr.width} ${fr.y + fr.height / 2} L ${tr.x} ${tr.y + tr.height / 2}`;
-  }
-  const x0 = fr.x + fr.width / 2;
-  const y0 = fr.y + fr.height;
-  const x1 = tr.x + tr.width / 2;
-  const y1 = tr.y + tr.height;
-  return `M ${x0} ${y0} C ${x0} ${y0 + ARC_DIP}, ${x1} ${y1 + ARC_DIP}, ${x1} ${y1}`;
+  if (seg.mode === "forward") return `${topArcLTR(fr, true)} ${topArcLTR(tr, false)}`;
+  return `${bottomArcRTL(fr, true)} ${bottomArcRTL(tr, false)}`;
 }
 
 function pulseColor(seg: FlowSegment): string {
@@ -47,80 +63,62 @@ export interface SignalFlowProps {
 export function SignalFlow({ rects, containerWidth, containerHeight, segment, verdict, finished }: SignalFlowProps) {
   const coreRef = useRef<SVGPathElement>(null);
   const glowRef = useRef<SVGPathElement>(null);
-  const headRef = useRef<SVGCircleElement>(null);
-  const srcRef = useRef<SVGRectElement>(null);
-  const dstRef = useRef<SVGRectElement>(null);
   const raf = useRef<number>(0);
 
+  // Dim always-on connectors in the gaps so the "line" between the shapes is always present; the
+  // flow merges into these as it crosses from one card to the next.
   const rails = useMemo(() => {
     if (!rects) return [];
     const out: string[] = [];
     for (let i = 0; i < signalOrder.length - 1; i++) {
       const fr = rects[signalOrder[i]];
       const tr = rects[signalOrder[i + 1]];
-      out.push(`M ${fr.x + fr.width} ${fr.y + fr.height / 2} L ${tr.x} ${tr.y + tr.height / 2}`);
+      out.push(`M ${fr.x + fr.width} ${midY(fr)} L ${tr.x} ${midY(tr)}`);
     }
     return out;
   }, [rects]);
 
   const path = segment && rects ? segPath(segment, rects) : "";
   const color = segment ? pulseColor(segment) : "#fff";
-  const dstColor = segment ? roleMeta[segment.to].color : "#fff";
-  const srcRect = segment && rects ? rects[segment.from] : null;
-  const dstRect = segment && rects ? rects[segment.to] : null;
 
   useEffect(() => {
-    if (!segment || !coreRef.current || !glowRef.current || !headRef.current) return;
+    if (!segment || !coreRef.current || !glowRef.current) return;
     const core = coreRef.current;
     const glow = glowRef.current;
-    const head = headRef.current;
-    const src = srcRef.current;
-    const dst = dstRef.current;
 
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      if (dst) dst.setAttribute("opacity", "0.5");
-      return;
-    }
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
 
     const total = core.getTotalLength();
-    const dash = `${TRAIL} ${total + TRAIL}`;
-    core.setAttribute("stroke-dasharray", dash);
-    glow.setAttribute("stroke-dasharray", dash);
+    const arr = `${DASH} ${total + DASH}`;
+    core.setAttribute("stroke-dasharray", arr);
+    glow.setAttribute("stroke-dasharray", arr);
 
     let start = 0;
     function frame(ts: number) {
       if (!start) start = ts;
       const raw = Math.min((ts - start) / DURATION, 1);
       const t = easeInOut(raw);
-      const offset = TRAIL - t * total;
+      // slide the single bright dash from just before the path start to just past its end
+      const offset = DASH - t * (total + DASH);
       core.setAttribute("stroke-dashoffset", String(offset));
       glow.setAttribute("stroke-dashoffset", String(offset));
-
-      const pt = core.getPointAtLength(Math.min(t * total, total - 0.5));
-      head.setAttribute("cx", String(pt.x));
-      head.setAttribute("cy", String(pt.y));
-
-      const fade = raw < 0.08 ? raw / 0.08 : raw > 0.92 ? (1 - raw) / 0.08 : 1;
+      // gentle fade in/out at the very ends so it appears and clears smoothly
+      const fade = raw < 0.1 ? raw / 0.1 : raw > 0.9 ? Math.max((1 - raw) / 0.1, 0) : 1;
       core.setAttribute("opacity", String(fade));
-      glow.setAttribute("opacity", String(fade * 0.5));
-      head.setAttribute("opacity", String(fade));
-      if (src) src.setAttribute("opacity", String((1 - t) * 0.55));
-      if (dst) dst.setAttribute("opacity", String(t * 0.6));
+      glow.setAttribute("opacity", String(fade * 0.55));
 
       if (raw < 1) {
         raf.current = requestAnimationFrame(frame);
       } else {
         core.setAttribute("opacity", "0");
         glow.setAttribute("opacity", "0");
-        head.setAttribute("opacity", "0");
-        if (src) src.setAttribute("opacity", "0");
-        if (dst) dst.setAttribute("opacity", "0.4");
       }
     }
     raf.current = requestAnimationFrame(frame);
     return () => {
       cancelAnimationFrame(raf.current);
-      for (const el of [core, glow, head, src, dst]) el?.setAttribute("opacity", "0");
+      core.setAttribute("opacity", "0");
+      glow.setAttribute("opacity", "0");
     };
   }, [segment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -129,16 +127,16 @@ export function SignalFlow({ rects, containerWidth, containerHeight, segment, ve
 
   return (
     <svg
-      className="pointer-events-none absolute inset-0 hidden md:block"
-      style={{ overflow: "visible" }}
+      className="pointer-events-none absolute inset-0 z-10 hidden md:block"
+      style={{ overflow: "visible", mixBlendMode: "screen" }}
       width={containerWidth}
       height={containerHeight}
       viewBox={`0 0 ${containerWidth} ${containerHeight}`}
       aria-hidden
     >
       <defs>
-        <filter id="sf-glow" x="-120%" y="-120%" width="340%" height="340%">
-          <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="b" />
+        <filter id="sf-glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="2.6" result="b" />
           <feMerge>
             <feMergeNode in="b" />
             <feMergeNode in="SourceGraphic" />
@@ -146,29 +144,24 @@ export function SignalFlow({ rects, containerWidth, containerHeight, segment, ve
         </filter>
       </defs>
 
+      {/* dim always-on connectors in the gaps between cards */}
       {rails.map((d, i) => (
-        <path key={i} d={d} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth={1} />
+        <path key={i} d={d} fill="none" stroke="rgba(255,255,255,0.18)" strokeWidth={1.25} />
       ))}
 
+      {/* on a finished run, tint the connectors with the verdict colour */}
       {verdictColor &&
         rails.map((d, i) => (
-          <path key={`v-${i}`} d={d} fill="none" stroke={verdictColor} strokeWidth={1.5} opacity={0.32} filter="url(#sf-glow)" />
+          <path key={`v-${i}`} d={d} fill="none" stroke={verdictColor} strokeWidth={1.5} opacity={0.5} filter="url(#sf-glow)" />
         ))}
 
-      {segment && srcRect && (
-        <rect ref={srcRef} x={srcRect.x} y={srcRect.y} width={srcRect.width} height={srcRect.height} rx={9} ry={9} fill="none" stroke={color} strokeWidth={1.5} filter="url(#sf-glow)" opacity={0} />
-      )}
-      {segment && dstRect && (
-        <rect ref={dstRef} x={dstRect.x} y={dstRect.y} width={dstRect.width} height={dstRect.height} rx={9} ry={9} fill="none" stroke={dstColor} strokeWidth={1.5} filter="url(#sf-glow)" opacity={0} />
-      )}
-
+      {/* the flowing current: a soft aura and a bright core that travel along the border path */}
       {segment && (
         <path ref={glowRef} d={path} fill="none" stroke={color} strokeWidth={GLOW_W} strokeLinecap="round" filter="url(#sf-glow)" opacity={0} />
       )}
       {segment && (
-        <path ref={coreRef} d={path} fill="none" stroke={color} strokeWidth={CORE_W} strokeLinecap="round" opacity={0} />
+        <path ref={coreRef} d={path} fill="none" stroke={color} strokeWidth={CORE_W} strokeLinecap="round" filter="url(#sf-glow)" opacity={0} />
       )}
-      {segment && <circle ref={headRef} r={HEAD_R} fill={color} filter="url(#sf-glow)" opacity={0} />}
     </svg>
   );
 }

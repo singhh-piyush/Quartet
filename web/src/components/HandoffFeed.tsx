@@ -25,9 +25,12 @@ function Chip({ text }: { text: string }) {
 }
 
 export function HandoffFeed({ feed }: { feed: FeedItem[] }) {
-  const endRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    // Scroll only this panel's own container. scrollIntoView would scroll every scrollable ancestor
+    // including the window, which made the whole page jump down on each new message.
+    const el = listRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [feed.length]);
 
   return (
@@ -38,7 +41,7 @@ export function HandoffFeed({ feed }: { feed: FeedItem[] }) {
           message handoffs
         </span>
       </div>
-      <div className="flex-1 space-y-1.5 overflow-y-auto px-3 py-3">
+      <div ref={listRef} className="flex-1 space-y-1.5 overflow-y-auto px-3 py-3">
         {feed.length === 0 && (
           <div className="pt-8 text-center font-mono text-[13px] text-[var(--text-3)]">
             awaiting first message...
@@ -79,7 +82,6 @@ export function HandoffFeed({ feed }: { feed: FeedItem[] }) {
             </div>
           );
         })}
-        <div ref={endRef} />
       </div>
     </div>
   );

@@ -163,22 +163,15 @@ def write_transcript(client: RestClient, room_id: str, task_id: str) -> None:
     logging.info("[%s] transcript -> %s", task_id, out)
 
 
-def write_transcript_json(client: RestClient, room_id: str, task_id: str, problem: dict, solution: str) -> None:
-    """Persist the full room transcript (every message, full body) to results/transcripts/<run_id>.json.
-
-    This is the source for the demo's reasoning panel: the event stream keeps only 200-char previews,
-    so full agent reasoning lives here instead. Local artifact, the user's own agent output, no keys.
-    """
-    run_id = os.environ.get("QUARTET_RUN_ID", "")
-    resp = _with_retry(client.agent_api_context.get_agent_chat_context, room_id, page_size=100)
-    msgs = sorted(resp.data, key=_msg_ts)
-    messages = []
-    for m in msgs:
+def _transcript_messages(msgs) -> list[dict]:
+    """Turn raw room messages into the transcript's message list (full bodies, no keys)."""
+    out = []
+    for m in sorted(msgs, key=_msg_ts):
         sender = m.sender_name or m.sender_id or "unknown"
         content = m.content or ""
         status, _ = classify(content)
         inserted = getattr(m, "inserted_at", None)
-        messages.append({
+        out.append({
             "ts": inserted.isoformat() if inserted else None,
             "role": sender.lower(),
             "sender": sender,
@@ -187,18 +180,37 @@ def write_transcript_json(client: RestClient, room_id: str, task_id: str, proble
             "mentions": _MENTION.findall(content),
             "kind": status,
         })
+    return out
+
+
+def _save_transcript(run_id: str, task_id: str, room_id: str, prompt: str, solution: str, msgs) -> None:
+    """Write results/transcripts/<run_id>.json from the given room messages. Called incrementally
+    during the run (so the reasoning panel fills live) and once more at the end with the solution."""
+    if not run_id:
+        return
     out = {
         "run_id": run_id,
         "task_id": task_id,
         "room_id": room_id,
-        "prompt": problem.get("prompt", ""),
+        "prompt": prompt,
         "final_solution": solution,
-        "messages": messages,
+        "messages": _transcript_messages(msgs),
     }
     path = Path("results/transcripts") / f"{run_id}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(out, indent=2))
-    logging.info("[%s] reasoning transcript -> %s", task_id, path)
+
+
+def write_transcript_json(client: RestClient, room_id: str, task_id: str, problem: dict, solution: str) -> None:
+    """Persist the full room transcript (every message, full body) to results/transcripts/<run_id>.json.
+
+    This is the source for the demo's reasoning panel: the event stream keeps only 200-char previews,
+    so full agent reasoning lives here instead. Local artifact, the user's own agent output, no keys.
+    """
+    run_id = os.environ.get("QUARTET_RUN_ID", "")
+    resp = _with_retry(client.agent_api_context.get_agent_chat_context, room_id, page_size=100)
+    _save_transcript(run_id, task_id, room_id, problem.get("prompt", ""), solution, resp.data)
+    logging.info("[%s] reasoning transcript -> results/transcripts/%s.json", task_id, run_id)
 
 
 def open_room(client: RestClient, problem: dict, agent_ids: dict) -> str:
@@ -267,12 +279,8 @@ def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: st
             who = msg.sender_name or msg.sender_id
             snippet = " ".join(msg.content.split())[:140]
             logging.info("    %s (%s): %s", who, msg.sender_type, snippet)
-            # Record every agent post in the event stream (the conductor's own post is already
-            # emitted in post_problem, so skip it here to avoid a duplicate).
-            if msg.sender_id != conductor_id:
-                emit("message_posted", role=(msg.sender_name or msg.sender_id or "unknown").lower(),
-                     room_id=room_id, task_id=task_id, preview=msg.content or "",
-                     mentions=_MENTION.findall(msg.content or ""))
+            # The agents emit their own message_posted events now (the inbox-scoped conductor only sees
+            # messages that mention it, so it cannot observe the Spec->Coder->Tester handoffs at all).
             from_repairer = msg.sender_id == repairer_id or (msg.sender_name or "").lower() == "repairer"
             if from_repairer:
                 status, solution = classify(msg.content)
@@ -286,6 +294,12 @@ def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: st
         now = time.monotonic()
         if saw_new:
             last_beat = now
+            # Refresh the transcript so the reasoning panel fills in as agents speak, not only at the
+            # end. Solution is empty until a terminal is found; the final write adds it.
+            try:
+                _save_transcript(os.environ.get("QUARTET_RUN_ID", ""), task_id or "", room_id, "", "", resp.data)
+            except Exception:  # noqa: BLE001 - never let transcript I/O interrupt harvesting
+                pass
         elif now - last_beat >= 30:
             logging.info("    ...waiting for agents (%ds elapsed, %d message(s) seen)", int(now - start), len(seen))
             last_beat = now
@@ -325,11 +339,13 @@ def drive_room(client: RestClient, problem: dict, room_id: str, agent_ids: dict,
     else:  # TIMEOUT
         record["error"] = f"no terminal message within {timeout:.0f}s"
 
-    emit("scored", role="conductor", room_id=room_id, task_id=task_id, passed=record["passed"], status=status)
+    # Write the reasoning transcript BEFORE the scored event. scored ends the live SSE and the UI
+    # fetches /api/transcript in response; writing first guarantees the file is on disk by then.
     try:
         write_transcript_json(client, room_id, task_id, problem, solution)
     except Exception as e:  # noqa: BLE001 - a transcript failure must not sink the run
         logging.warning("[%s] reasoning transcript failed: %s", task_id, e)
+    emit("scored", role="conductor", room_id=room_id, task_id=task_id, passed=record["passed"], status=status)
     if trace:
         try:
             write_transcript(client, room_id, task_id)

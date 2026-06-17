@@ -37,7 +37,7 @@ import httpx
 
 from bench.events import read_events
 from orchestrator import run_config
-from orchestrator.config import LOCAL_BASE_URL, get_agent
+from orchestrator.config import LOCAL_BASE_URL, aimlapi_key, get_agent
 
 ROOT = Path(__file__).resolve().parent.parent
 EVENTS_DIR = ROOT / "results" / "events"
@@ -46,7 +46,10 @@ ROLES = ["spec", "coder", "tester", "repairer"]
 
 _CONNECT_TIMEOUT = 60.0   # seconds to wait for all four agents to connect to Band
 _SETTLE_AFTER_CONNECT = 3.0  # let startup room subscription settle before posting
-_DRIVE_TIMEOUT = 180.0    # per-problem harvest timeout
+# Per-problem harvest timeout. Generous because a local CPU/MoE model runs the whole loop (Spec ->
+# Coder -> Tester -> Repairer plus a repair round), several seconds per generation plus Band round
+# trips. A hosted provider finishes far inside this.
+_DRIVE_TIMEOUT = 360.0
 _DRIVE_POLL = 2.0
 
 
@@ -76,6 +79,18 @@ class RunManager:
         """Begin a live run for task_id. Stops any in-flight run first. Returns the new run state."""
         self.stop()
         run_id = _mint_run_id()
+        # Fail fast on an unrunnable config (e.g. agents set to aimlapi with no key) instead of
+        # spawning four processes that die on the first model call and look like a silent stall.
+        fatal = _fatal_config_error()
+        if fatal:
+            with self._lock:
+                self.state = {
+                    "status": "error", "run_id": run_id, "task_id": task_id,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                    "result": None, "warnings": [], "error": fatal,
+                }
+            return self.status()
         with self._lock:
             self.state = {
                 "status": "starting",
@@ -246,6 +261,37 @@ def _terminate(proc: subprocess.Popen) -> None:
             pass
 
 
+def _aiml_key() -> str | None:
+    """The aimlapi inference key (env / .env / agent_config.yaml), or None."""
+    return aimlapi_key()
+
+
+def _fatal_config_error() -> str | None:
+    """Return a clear message when the run cannot possibly produce agent inference, so start() can
+    refuse instead of spawning agents that die immediately. The unambiguous cases are fatal: agents
+    set to aimlapi with no key at all, or with a key that is actually a band_ chat-room key (which
+    aimlapi rejects). A local server being down is a warning (it may come up during the connect
+    window), handled by _preflight."""
+    cfg = run_config.load()
+    agent_providers = {a["provider"] for a in cfg["agents"].values()}
+    if "aimlapi" in agent_providers:
+        key = _aiml_key()
+        if not key:
+            return (
+                "agents are set to the aimlapi provider but no aimlapi key is set. Add it to "
+                "agent_config.yaml as `aiml_api_key: <key>` (or AIML_API_KEY in .env), or switch the "
+                "agents to the local provider in Models. The band_ keys in agent_config.yaml "
+                "authenticate the Band chat room, not the model inference - aimlapi needs its own key."
+            )
+        if key.startswith("band_"):
+            return (
+                "the aimlapi key looks like a Band chat-room key (it starts with 'band_'). aimlapi "
+                "will reject it. Put your aimlapi inference key (from aimlapi.com) in agent_config.yaml "
+                "as `aiml_api_key: <key>`, or switch the agents to the local provider in Models."
+            )
+    return None
+
+
 def _preflight() -> list[str]:
     """Best-effort check that the selected inference endpoints are reachable. Warnings only; the run
     still starts so a judge sees the agents connect and any failure surfaces in the stream."""
@@ -254,8 +300,8 @@ def _preflight() -> list[str]:
     providers = {a["provider"] for a in cfg["agents"].values()} | {cfg["large"]["provider"]}
     if "local" in providers and not _local_up():
         warnings.append(f"local model server not reachable at {LOCAL_BASE_URL} (start it for live runs)")
-    if "aimlapi" in providers and not (os.environ.get("AIML_API_KEY") or _dotenv_has("AIML_API_KEY")):
-        warnings.append("AIML_API_KEY is not set; aimlapi agents cannot reach a model")
+    if "aimlapi" in providers and not _aiml_key():
+        warnings.append("no aimlapi key found (set aiml_api_key in agent_config.yaml or AIML_API_KEY in .env)")
     return warnings
 
 
@@ -265,14 +311,3 @@ def _local_up() -> bool:
         return True
     except httpx.HTTPError:
         return False
-
-
-def _dotenv_has(key: str) -> bool:
-    env = ROOT / ".env"
-    try:
-        for line in env.read_text().splitlines():
-            if line.strip().startswith(f"{key}=") and line.split("=", 1)[1].strip():
-                return True
-    except FileNotFoundError:
-        pass
-    return False

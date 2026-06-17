@@ -16,3 +16,9 @@ agents:
   conductor:
     agent_id: ""
     api_key: ""
+
+# The agent api_keys above (band_...) authenticate the agents to the Band chat room. They are NOT
+# model-inference keys. To run the four agents on the aimlapi provider, put your aimlapi inference
+# key here (from aimlapi.com) - it is read by orchestrator.config.aimlapi_key(). Alternatively set
+# AIML_API_KEY in .env; the env var wins if both are present. Leave blank to run agents locally.
+aiml_api_key: ""
