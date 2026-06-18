@@ -122,11 +122,11 @@ export interface FeedItem {
 // ---- control plane ----
 
 // The selectable providers (all OpenAI-compatible). aimlapi is the closed-source path.
-export const PROVIDERS = ["local", "groq", "aimlapi", "openai_compatible"] as const;
+export const PROVIDERS = ["local", "groq", "aimlapi", "gemini", "openrouter", "openai_compatible"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 // Providers that need an API key / base_url entered from the dashboard.
-export const KEYED_PROVIDERS = ["groq", "aimlapi", "openai_compatible"] as const;
+export const KEYED_PROVIDERS = ["groq", "aimlapi", "gemini", "openrouter", "openai_compatible"] as const;
 
 export interface ModelSlot {
   provider: string;
@@ -191,6 +191,13 @@ export interface ProjectFileContent {
   content: string;
 }
 
+export interface LabProgress {
+  done: number;
+  total: number;
+  passed: number;
+  problems: { task_id: string; passed: boolean; status?: string | null; latency_ms?: number }[];
+}
+
 export interface RunStatus {
   status: string; // idle | starting | running | done | error | stopped
   run_id: string | null;
@@ -200,6 +207,49 @@ export interface RunStatus {
   warnings?: string[];
   error?: string | null;
   result?: { passed?: boolean; status?: string } | null;
+  mode?: string; // "race" | "build" | "lab"
+  stack?: string;
+  lab?: LabProgress | null;
+}
+
+// ---- stack lab ----
+
+export interface LabReference {
+  source: "estimate";
+  basis: string; // "baselines.json" | "heuristic"
+  model: string;
+  provider: string;
+  pass_rate: number | null;
+  pass_count: number | null;
+  n_total: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_per_solved: number | null;
+}
+
+export interface LabResult {
+  stack: string;
+  run_id: string;
+  ts: string;
+  source: "real";
+  n_total: number;
+  subset: string[];
+  models: Record<string, ModelSlot>; // spec/coder/tester/repairer + large
+  pass_count: number;
+  pass_rate: number;
+  tokens: { prompt: number; completion: number; total: number };
+  cost_usd: number;
+  cost_per_solved: number;
+  by_role: Record<string, { prompt: number; completion: number; total: number; cost_usd: number }>;
+  latency: { total_ms: number; avg_ms: number };
+  per_problem: { task_id: string; passed: boolean; status?: string | null; latency_ms?: number }[];
+  reference: LabReference;
+}
+
+// The editable per-model price table (dollars per 1M input/output tokens). Not a secret.
+export interface PricingTable {
+  _note?: string;
+  [model: string]: { input: number; output: number } | string | undefined;
 }
 
 export interface TranscriptMessage {

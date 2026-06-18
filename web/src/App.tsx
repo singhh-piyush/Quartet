@@ -3,6 +3,7 @@ import { fetchRuns } from "./api";
 import { BuildView } from "./components/BuildView";
 import { CompareView } from "./components/CompareView";
 import { Controls } from "./components/Controls";
+import { LabView } from "./components/LabView";
 import { LiveConsole } from "./components/LiveConsole";
 import { ResultsView } from "./components/ResultsView";
 import { RoomView } from "./components/RoomView";
@@ -14,19 +15,26 @@ import { usePlayer } from "./usePlayer";
 import { useRunStatus } from "./useRunStatus";
 import { useTranscript } from "./useTranscript";
 
-type View = "build" | "race" | "results" | "compare";
-type Mode = "live" | "replay";
+type View = "build" | "race" | "lab";
+// The Race tab now also hosts Results and Compare (moved here to declutter the top nav).
+type RaceTab = "live" | "replay" | "results" | "compare";
 
 const TABS: { key: View; label: string }[] = [
   { key: "build", label: "Build" },
   { key: "race", label: "Race" },
+  { key: "lab", label: "Lab" },
+];
+
+const RACE_TABS: { key: RaceTab; label: string }[] = [
+  { key: "live", label: "Live" },
+  { key: "replay", label: "Replay" },
   { key: "results", label: "Results" },
   { key: "compare", label: "Compare" },
 ];
 
 export default function App() {
   const [view, setView] = useState<View>("build");
-  const [mode, setMode] = useState<Mode>("live");
+  const [raceTab, setRaceTab] = useState<RaceTab>("live");
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [replayRunId, setReplayRunId] = useState<string>("demo-golden");
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
@@ -39,16 +47,18 @@ export default function App() {
   }, []);
 
   const player = usePlayer(replayRunId, speed, setSpeed);
-  const { status, start, startBuild, stop } = useRunStatus();
-  const live = useLiveRun(mode === "live" ? liveRunId : null);
+  const { status, start, startBuild, startLab, stop } = useRunStatus();
+  const liveActive = view === "race" && raceTab === "live";
+  const live = useLiveRun(liveActive ? liveRunId : null);
   const { models, saving, update, patchMany, reload: reloadModels } = useModels();
 
-  const room = mode === "live" ? live.room : player.room;
-  const transcriptRunId = mode === "live" ? liveRunId : replayRunId;
-  const transcriptKey = mode === "live" ? live.done : player.cursor >= player.total;
-  // While a live run is streaming, poll the transcript so reasoning fills in as agents speak.
-  const pollTranscript = mode === "live" && !!liveRunId && !live.done;
-  const { transcript } = useTranscript(transcriptRunId, transcriptKey, pollTranscript);
+  const isRoom = raceTab === "live" || raceTab === "replay";
+  const room = raceTab === "replay" ? player.room : live.room;
+  const transcriptRunId = raceTab === "replay" ? replayRunId : liveRunId;
+  const transcriptDone = raceTab === "replay" ? player.cursor >= player.total : live.done;
+  // While a live run streams, poll the transcript so reasoning fills in as agents speak.
+  const pollTranscript = liveActive && !!liveRunId && !live.done;
+  const { transcript } = useTranscript(transcriptRunId, transcriptDone, pollTranscript);
 
   const onRun = async (taskId: string) => {
     try {
@@ -60,7 +70,9 @@ export default function App() {
   };
 
   const controls =
-    mode === "live" ? (
+    raceTab === "replay" ? (
+      <Controls player={player} runs={runs} runId={replayRunId} setRunId={setReplayRunId} />
+    ) : (
       <LiveConsole
         status={status}
         models={models}
@@ -70,28 +82,34 @@ export default function App() {
         onReloadModels={reloadModels}
         onRun={onRun}
         onStop={stop}
-        onReplay={() => setMode("replay")}
+        onReplay={() => setRaceTab("replay")}
       />
-    ) : (
-      <Controls player={player} runs={runs} runId={replayRunId} setRunId={setReplayRunId} />
     );
 
   const statusLabel =
     view === "build"
-      ? status.active || status.status === "starting"
+      ? status.mode === "build" && (status.active || status.status === "starting")
         ? "building"
-        : status.status === "done"
+        : status.mode === "build" && status.status === "done"
           ? "complete"
           : "ready"
-      : mode === "live"
-        ? status.active || status.status === "starting"
-          ? "running live"
-          : live.done
+      : view === "lab"
+        ? status.mode === "lab" && (status.active || status.status === "starting")
+          ? "benchmarking"
+          : status.mode === "lab" && status.status === "done"
             ? "complete"
             : "ready"
-        : player.playing
-          ? "replaying"
-          : "recorded";
+        : raceTab === "results" || raceTab === "compare"
+          ? "results"
+          : raceTab === "replay"
+            ? player.playing
+              ? "replaying"
+              : "recorded"
+            : status.active || status.status === "starting"
+              ? "running live"
+              : live.done
+                ? "complete"
+                : "ready";
 
   return (
     <div className="flex h-full flex-col overflow-hidden px-6 py-5 sm:px-8 lg:px-10">
@@ -113,12 +131,11 @@ export default function App() {
           </span>
           {view === "race" && (
             <nav className="flex items-center gap-1 rounded-xl border border-[var(--line)] bg-black/40 p-1">
-              <ModeButton active={mode === "live"} onClick={() => setMode("live")}>
-                Live
-              </ModeButton>
-              <ModeButton active={mode === "replay"} onClick={() => setMode("replay")}>
-                Replay
-              </ModeButton>
+              {RACE_TABS.map((t) => (
+                <ModeButton key={t.key} active={raceTab === t.key} onClick={() => setRaceTab(t.key)}>
+                  {t.label}
+                </ModeButton>
+              ))}
             </nav>
           )}
           <nav className="flex items-center gap-1 rounded-xl border border-[var(--line)] bg-black/40 p-1">
@@ -132,7 +149,7 @@ export default function App() {
       </header>
 
       <main className="min-h-0 flex-1">
-        <div key={view} className="view-enter h-full min-h-0">
+        <div key={`${view}-${raceTab}`} className="view-enter h-full min-h-0">
           {view === "build" ? (
             <BuildView
               status={status}
@@ -144,17 +161,28 @@ export default function App() {
               startBuild={startBuild}
               stop={stop}
             />
-          ) : view === "race" ? (
+          ) : view === "lab" ? (
+            <LabView
+              status={status}
+              models={models}
+              saving={saving}
+              onUpdate={update}
+              onPatchMany={patchMany}
+              onReloadModels={reloadModels}
+              startLab={startLab}
+              stop={stop}
+            />
+          ) : isRoom ? (
             <RoomView
               room={room}
               transcript={transcript}
               controls={controls}
-              error={mode === "live" ? live.error : player.error}
-              live={mode === "live"}
+              error={raceTab === "live" ? live.error : player.error}
+              live={raceTab === "live"}
             />
           ) : (
             <div className="h-full overflow-y-auto">
-              {view === "results" ? <ResultsView animate={true} /> : <CompareView animate={true} />}
+              {raceTab === "results" ? <ResultsView animate={true} /> : <CompareView animate={true} />}
             </div>
           )}
         </div>
@@ -163,14 +191,20 @@ export default function App() {
       <footer className="mt-4 flex shrink-0 items-center justify-between border-t border-[var(--line)] pt-3 font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)]">
         <span>
           {view === "build"
-            ? status.run_id && status.task_id?.startsWith("build")
+            ? status.run_id && status.mode === "build"
               ? `build run ${status.run_id}`
               : "describe a project to build it live"
-            : mode === "live"
-              ? liveRunId
-                ? `live run ${liveRunId}`
-                : "no live run yet"
-              : `replay of results/events/${replayRunId}.jsonl`}
+            : view === "lab"
+              ? status.mode === "lab" && status.run_id
+                ? `lab run ${status.stack ?? ""} ${status.run_id}`
+                : "pick a stack and benchmark it"
+              : raceTab === "results" || raceTab === "compare"
+                ? "HumanEval benchmark configurations"
+                : raceTab === "replay"
+                  ? `replay of results/events/${replayRunId}.jsonl`
+                  : liveRunId
+                    ? `live run ${liveRunId}`
+                    : "no live run yet"}
         </span>
         <span>Track 2 / multi-agent software development</span>
       </footer>

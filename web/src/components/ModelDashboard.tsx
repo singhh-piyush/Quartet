@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { roleMeta } from "../theme";
-import { PROVIDERS } from "../types";
-import type { ModelConfig, RunStatus } from "../types";
+import { KEYED_PROVIDERS, PROVIDERS } from "../types";
+import type { KeyStatus, ModelConfig, RunStatus } from "../types";
 
 const ROLES = ["spec", "coder", "tester", "repairer"] as const;
 const SUGGESTIONS = [
@@ -18,6 +18,7 @@ function Row({
   model,
   provider,
   online,
+  keyMissing,
   onModel,
   onProvider,
 }: {
@@ -26,6 +27,7 @@ function Row({
   model: string;
   provider: string;
   online?: boolean | null;
+  keyMissing?: boolean;
   onModel: (m: string) => void;
   onProvider?: (p: string) => void;
 }) {
@@ -57,6 +59,15 @@ function Row({
         onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
         className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-black/60 px-2.5 py-1.5 font-mono text-[12.5px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
       />
+      {keyMissing && (
+        <span
+          className="shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide"
+          style={{ background: "rgba(248,113,113,0.12)", color: "var(--fail)" }}
+          title="set this provider's key under provider keys above"
+        >
+          no key
+        </span>
+      )}
       {onProvider && (
         <select
           value={provider}
@@ -78,17 +89,22 @@ export function ModelDashboard({
   models,
   status,
   saving,
+  keys,
   onSlot,
   onProvider,
 }: {
   models: ModelConfig | null;
   status: RunStatus;
   saving: boolean;
+  keys?: KeyStatus;
   onSlot: (target: string, model: string) => void;
   onProvider: (target: string, provider: string) => void;
 }) {
   const onlineByRole: Record<string, boolean> = {};
   for (const a of status.agents) onlineByRole[a.role] = a.alive;
+
+  const keyMissing = (provider: string): boolean =>
+    (KEYED_PROVIDERS as readonly string[]).includes(provider) && !keys?.[provider]?.has_key;
 
   return (
     <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
@@ -116,6 +132,7 @@ export function ModelDashboard({
               model={models.agents[r]?.model ?? ""}
               provider={models.agents[r]?.provider ?? "local"}
               online={onlineByRole[r] ?? null}
+              keyMissing={keyMissing(models.agents[r]?.provider ?? "local")}
               onModel={(m) => onSlot(r, m)}
               onProvider={(p) => onProvider(r, p)}
             />
@@ -126,6 +143,7 @@ export function ModelDashboard({
             color={roleMeta.coder.color}
             model={models.large?.model ?? ""}
             provider={models.large?.provider ?? "local"}
+            keyMissing={keyMissing(models.large?.provider ?? "local")}
             onModel={(m) => onSlot("large", m)}
             onProvider={(p) => onProvider("large", p)}
           />

@@ -7,6 +7,7 @@ import { useTranscript } from "../useTranscript";
 import { AgentRail } from "./AgentRail";
 import { BandRoom } from "./BandRoom";
 import { OutputPanel } from "./OutputPanel";
+import { SecretInput } from "./SecretInput";
 import { StackBuilder } from "./StackBuilder";
 
 const TYPES = [
@@ -149,15 +150,14 @@ export function BuildView({
           <div className="ml-auto flex items-center gap-3">
             <label className="flex items-center gap-1.5" title="Required only when driving a remote demo server over a tunnel">
               <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--text-3)]">token</span>
-              <input
-                type="password"
+              <SecretInput
                 value={token}
-                onChange={(e) => {
-                  setToken(e.target.value);
-                  setApiToken(e.target.value);
+                onChange={(v) => {
+                  setToken(v);
+                  setApiToken(v);
                 }}
                 placeholder="tunnel"
-                className="w-24 rounded-md border border-[var(--line)] bg-black/60 px-2 py-1 font-mono text-[11.5px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
+                className="w-32"
               />
             </label>
             <button

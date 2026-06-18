@@ -1,7 +1,9 @@
 import type {
   ConfigResult,
   KeyStatus,
+  LabResult,
   ModelConfig,
+  PricingTable,
   ProjectFileContent,
   ProjectInfo,
   ProviderModels,
@@ -129,6 +131,24 @@ export function duplicateStack(name: string, newName: string): Promise<{ saved: 
 
 export function fetchAgents(): Promise<RunStatus> {
   return getJson<RunStatus>("/api/agents", "agents");
+}
+
+// ---- stack lab (benchmark a stack over a HumanEval subset; persisted per stack) ----
+
+export function runLab(stack: string, n: number): Promise<RunStatus> {
+  return postJson<RunStatus>("/api/lab/run", { stack, n }, "lab run");
+}
+
+export function fetchLabResults(): Promise<LabResult[]> {
+  return getJson<{ results: LabResult[] }>("/api/lab/results", "lab results").then((d) => d.results ?? []);
+}
+
+export function fetchPricing(): Promise<PricingTable> {
+  return getJson<PricingTable>("/api/lab/pricing", "pricing");
+}
+
+export function savePricing(model: string, input: number, output: number): Promise<PricingTable> {
+  return postJson<PricingTable>("/api/lab/pricing", { model, input, output }, "save pricing");
 }
 
 export function startRun(taskId: string): Promise<RunStatus> {

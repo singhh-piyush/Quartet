@@ -459,8 +459,12 @@ def drive_room(client: RestClient, problem: dict, room_id: str, agent_ids: dict,
     return record
 
 
-def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id: str, timeout: float, poll: float, settle: float, trace: bool = False) -> dict:
-    """Open a room, wait for the agents to join, then drive it (CLI / benchmark path)."""
+def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id: str, timeout: float, poll: float, settle: float, trace: bool = False, should_stop=None) -> dict:
+    """Open a room, wait for the agents to join, then drive it (CLI / benchmark / lab path).
+
+    should_stop (when given) is threaded into drive_room so a Stop from the lab aborts the harvest
+    mid-problem instead of waiting out the timeout.
+    """
     task_id = problem["task_id"]
     room_id = open_room(client, problem, agent_ids)
     # Let the just-added agents receive the room-added event and subscribe before we post, so the
@@ -469,7 +473,7 @@ def run_problem(client: RestClient, problem: dict, agent_ids: dict, conductor_id
     if settle > 0:
         logging.info("[%s] waiting %.0fs for agents to join the room...", task_id, settle)
         time.sleep(settle)
-    return drive_room(client, problem, room_id, agent_ids, conductor_id, timeout, poll, trace)
+    return drive_room(client, problem, room_id, agent_ids, conductor_id, timeout, poll, trace, should_stop=should_stop)
 
 
 def _ensure_run_env() -> str:

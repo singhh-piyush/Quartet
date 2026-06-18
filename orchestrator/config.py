@@ -34,11 +34,25 @@ LOCAL_LARGE_URL = os.environ.get("LOCAL_LARGE_URL", "http://localhost:8080/v1")
 LOCAL_AGENTS_URL = os.environ.get("LOCAL_AGENTS_URL", "http://localhost:8081/v1")
 AIMLAPI_BASE_URL = "https://api.aimlapi.com/v1"
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+# Gemini's OpenAI-compatible layer (chat/completions, models) and OpenRouter, both OpenAI-shaped.
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # The cloud providers selectable from the dashboard, with their fixed OpenAI-compatible base. local has
 # no fixed base (per-process LOCAL_BASE_URL) and openai_compatible carries a user base in the key store.
-PROVIDERS = ("local", "groq", "aimlapi", "openai_compatible")
-_PROVIDER_BASE = {"groq": GROQ_BASE_URL, "aimlapi": AIMLAPI_BASE_URL}
+PROVIDERS = ("local", "groq", "aimlapi", "gemini", "openrouter", "openai_compatible")
+_PROVIDER_BASE = {
+    "groq": GROQ_BASE_URL,
+    "aimlapi": AIMLAPI_BASE_URL,
+    "gemini": GEMINI_BASE_URL,
+    "openrouter": OPENROUTER_BASE_URL,
+}
+# Keyed providers with a fixed base whose key resolves env-first then the dashboard store (same shape).
+_FIXED_KEYED = {
+    "groq": "GROQ_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
 
 # Band platform REST base for the conductor (Agent API). The SDK RestClient defaults to a dev
 # host, so the conductor passes this explicitly to share the agents' platform.
@@ -59,6 +73,29 @@ _GROQ_DEFAULTS = {
     "coder": "openai/gpt-oss-120b",
     "tester": "llama-3.3-70b-versatile",
     "repairer": "openai/gpt-oss-120b",
+}
+
+# Per-role default models on Gemini and OpenRouter (seeds only; the dashboard dropdown pulls the live
+# /models list at runtime). Verify ids against the provider before relying on them.
+_GEMINI_DEFAULTS = {
+    "spec": "gemini-2.5-flash-lite",
+    "coder": "gemini-2.5-flash",
+    "tester": "gemini-2.5-flash-lite",
+    "repairer": "gemini-2.5-flash",
+}
+_OPENROUTER_DEFAULTS = {
+    "spec": "openai/gpt-oss-20b",
+    "coder": "openai/gpt-oss-120b",
+    "tester": "meta-llama/llama-3.3-70b-instruct",
+    "repairer": "openai/gpt-oss-120b",
+}
+
+# Per-role default seeds by provider, used by make_llm and run_config when nothing is selected.
+_PROVIDER_DEFAULTS = {
+    "aimlapi": _AIML_DEFAULTS,
+    "groq": _GROQ_DEFAULTS,
+    "gemini": _GEMINI_DEFAULTS,
+    "openrouter": _OPENROUTER_DEFAULTS,
 }
 
 # Local OpenAI-compatible server (llama.cpp / vLLM); the model name is usually ignored.
@@ -113,18 +150,19 @@ def key_status() -> dict:
     """Which providers have a usable secret, plus the non-secret openai_compatible base_url. Never
     includes a key value, so it is safe to return to the client."""
     oc = provider_secret("openai_compatible")
-    return {
-        "groq": {"has_key": bool(provider_secret("groq").get("api_key"))},
-        "aimlapi": {"has_key": bool(provider_secret("aimlapi").get("api_key"))},
-        "openai_compatible": {"has_key": bool(oc.get("api_key")), "base_url": oc.get("base_url") or ""},
+    status = {
+        p: {"has_key": bool(provider_secret(p).get("api_key"))}
+        for p in ("groq", "aimlapi", "gemini", "openrouter")
     }
+    status["openai_compatible"] = {"has_key": bool(oc.get("api_key")), "base_url": oc.get("base_url") or ""}
+    return status
 
 
 def provider_secret(provider: str) -> dict:
     """Resolve {base_url?, api_key?} for a cloud provider from the environment first, then the
     dashboard key store. Never raises; missing values are simply absent so callers give a clear error.
 
-      groq               -> {api_key} from GROQ_API_KEY env / store
+      groq / gemini / openrouter -> {api_key} from the provider's env var, then the store
       aimlapi            -> {api_key} via aimlapi_key() (env / store / agent_config.yaml)
       openai_compatible  -> {base_url, api_key} from OPENAI_COMPAT_* env / store
       local              -> {} (uses the per-process LOCAL_BASE_URL, no key)
@@ -133,8 +171,8 @@ def provider_secret(provider: str) -> dict:
     if provider == "aimlapi":
         key = aimlapi_key()
         return {"api_key": key} if key else {}
-    if provider == "groq":
-        key = os.environ.get("GROQ_API_KEY") or store.get("api_key")
+    if provider in _FIXED_KEYED:
+        key = os.environ.get(_FIXED_KEYED[provider]) or store.get("api_key")
         return {"api_key": key} if key else {}
     if provider == "openai_compatible":
         out = {}
@@ -186,17 +224,16 @@ def make_llm(role: str | None = None, *, model: str | None = None, **kwargs) -> 
             **kwargs,
         )
 
-    if provider in ("aimlapi", "groq"):
+    if provider in _PROVIDER_BASE:  # aimlapi / groq / gemini / openrouter: fixed base + key + per-role model
         secret = provider_secret(provider)
         api_key = secret.get("api_key")
         if not api_key:
+            env_var = "AIML_API_KEY" if provider == "aimlapi" else _FIXED_KEYED.get(provider, f"{provider.upper()}_API_KEY")
             raise RuntimeError(
-                f"no {provider} key found. Add it in the dashboard (Build your stack), set "
-                f"{'AIML_API_KEY' if provider == 'aimlapi' else 'GROQ_API_KEY'} in .env, or put it in "
-                "orchestrator/provider_keys.json. Note: this is an inference key, not a band_ chat key."
+                f"no {provider} key found. Add it in the dashboard (Build your stack) or set "
+                f"{env_var} in .env. Note: this is an inference key, not a band_ chat key."
             )
-        defaults = _AIML_DEFAULTS if provider == "aimlapi" else _GROQ_DEFAULTS
-        resolved = _resolve_model(role, model, defaults)
+        resolved = _resolve_model(role, model, _PROVIDER_DEFAULTS.get(provider, {}))
         if not resolved:
             raise RuntimeError(f"no model for role {role!r}; set {role}_MODEL or pass model=")
         return ChatOpenAI(model=resolved, base_url=_PROVIDER_BASE[provider], api_key=api_key, **kwargs)

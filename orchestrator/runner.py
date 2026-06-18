@@ -23,7 +23,9 @@ agent_config.yaml; nothing secret is returned to the caller.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -35,32 +37,43 @@ from pathlib import Path
 
 import httpx
 
+from bench import pricing
 from bench.events import read_events
-from orchestrator import keystore, run_config
+from orchestrator import keystore, run_config, stacks
 from orchestrator.config import (
     AIMLAPI_BASE_URL,
+    GEMINI_BASE_URL,
     GROQ_BASE_URL,
     LOCAL_AGENTS_URL,
     LOCAL_LARGE_URL,
+    OPENROUTER_BASE_URL,
     aimlapi_key,
     get_agent,
     provider_secret,
 )
 
 # Providers that need a key/base resolved server-side before a run can produce inference.
-_KEYED_PROVIDERS = ("groq", "aimlapi", "openai_compatible")
+_KEYED_PROVIDERS = ("groq", "aimlapi", "gemini", "openrouter", "openai_compatible")
+# Keyed providers with a fixed base whose secret injects as one env var (config reads these first).
+_KEY_ENV_VARS = {
+    "groq": "GROQ_API_KEY",
+    "aimlapi": "AIML_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
 
 
 def _provider_key_env() -> dict:
     """Provider secrets from the in-memory keystore as child-process env vars. Spawned agents have no
     keystore of their own (a fresh process), so the keys reach them only through this env. Never logged.
-    Maps to the names config.provider_secret reads first: GROQ_API_KEY / AIML_API_KEY / OPENAI_COMPAT_*."""
+    Maps to the names config.provider_secret reads first (GROQ_API_KEY / AIML_API_KEY / GEMINI_API_KEY /
+    OPENROUTER_API_KEY / OPENAI_COMPAT_*)."""
     keys = keystore.all_keys()
     env: dict[str, str] = {}
-    if (keys.get("groq") or {}).get("api_key"):
-        env["GROQ_API_KEY"] = keys["groq"]["api_key"]
-    if (keys.get("aimlapi") or {}).get("api_key"):
-        env["AIML_API_KEY"] = keys["aimlapi"]["api_key"]
+    for provider, var in _KEY_ENV_VARS.items():
+        api_key = (keys.get(provider) or {}).get("api_key")
+        if api_key:
+            env[var] = api_key
     oc = keys.get("openai_compatible") or {}
     if oc.get("base_url"):
         env["OPENAI_COMPAT_BASE_URL"] = oc["base_url"]
@@ -71,6 +84,7 @@ def _provider_key_env() -> dict:
 ROOT = Path(__file__).resolve().parent.parent
 EVENTS_DIR = ROOT / "results" / "events"
 LOGS_DIR = ROOT / "results" / "logs"
+LAB_RUNS_DIR = ROOT / "results" / "lab" / "runs"  # one persisted StackResult per stack, newest wins
 ROLES = ["spec", "coder", "tester", "repairer"]
 
 _CONNECT_TIMEOUT = 60.0   # seconds to wait for all four agents to connect to Band
@@ -80,6 +94,107 @@ _SETTLE_AFTER_CONNECT = 3.0  # let startup room subscription settle before posti
 # trips. A hosted provider finishes far inside this.
 _DRIVE_TIMEOUT = 360.0
 _DRIVE_POLL = 2.0
+
+# Lab: long-lived agents run the subset, each problem in its own room. Per-problem timeout is tighter
+# than the single-race one (a hosted provider answers fast) but still room for one repair round.
+_LAB_PROBLEM_TIMEOUT = 240.0
+_LAB_SETTLE = 3.0   # delay after opening each per-problem room before posting (RoomAddedEvent push)
+_LAB_MAX_N = 20
+
+# Estimate-only single-large reference (no model call): how a lone large model would do/cost on the
+# same subset. Pass@1 comes from a prior baselines.json single_large run when present; tokens from that
+# run's per-problem average, else this heuristic. Always labeled an estimate in the result.
+_REF_TOKENS_PER_PROBLEM = 1100   # a large model reads one prompt and writes one solution
+_REF_PROMPT_FRACTION = 0.6       # assumed input/output split when only a token total is known
+
+_STACK_FILE_OK = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _safe_stack_file(name: str) -> Path:
+    slug = _STACK_FILE_OK.sub("-", (name or "").strip()).strip("-.") or "stack"
+    return LAB_RUNS_DIR / f"{slug}.json"
+
+
+def _reference_estimate(cfg: dict, n: int, table: dict) -> dict:
+    """A labeled cost/Pass@1 estimate for the lone large model over the same subset (no run)."""
+    model = cfg["large"]["model"]
+    sl = (_read_json(ROOT / "results" / "baselines.json") or {}).get("single_large") or {}
+    pass_rate = None
+    basis = "heuristic"
+    tpp = float(_REF_TOKENS_PER_PROBLEM)
+    if sl.get("total"):
+        if isinstance(sl.get("pass_rate"), (int, float)):
+            pass_rate = float(sl["pass_rate"])
+        elif sl.get("pass_count") is not None:
+            pass_rate = sl["pass_count"] / sl["total"]
+        if sl.get("total_tokens"):
+            tpp = sl["total_tokens"] / sl["total"]
+            basis = "baselines.json"
+    total_tokens = int(round(tpp * n))
+    prompt = int(round(total_tokens * _REF_PROMPT_FRACTION))
+    completion = total_tokens - prompt
+    cost = pricing.cost_usd(model, prompt, completion, table)
+    pass_count = int(round(pass_rate * n)) if pass_rate is not None else None
+    cps = round(cost / pass_count, 6) if pass_count else None
+    return {
+        "source": "estimate", "basis": basis, "model": model, "provider": cfg["large"]["provider"],
+        "pass_rate": pass_rate, "pass_count": pass_count, "n_total": n,
+        "total_tokens": total_tokens, "cost_usd": round(cost, 6), "cost_per_solved": cps,
+    }
+
+
+def _aggregate_lab(stack_name: str, run_id: str, cfg: dict, problems: list, per_problem: list,
+                   events: list, wall_s: float) -> dict:
+    """Build the persisted StackResult from per-problem scores + the run's llm_call token telemetry."""
+    table = pricing.load_pricing()
+    agg = pricing.cost_from_events(events, table)  # a lab has no race lane, so all llm_call are agents
+    n = len(per_problem)
+    pass_count = sum(1 for r in per_problem if r["passed"])
+    total = agg["total"]
+    latencies = [r["latency_ms"] for r in per_problem if r.get("latency_ms")]
+    return {
+        "stack": stack_name,
+        "run_id": run_id,
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "source": "real",
+        "n_total": n,
+        "subset": [p["task_id"] for p in problems],
+        "models": {**{r: cfg["agents"][r] for r in ROLES}, "large": cfg["large"]},
+        "pass_count": pass_count,
+        "pass_rate": pass_count / n if n else 0.0,
+        "tokens": {"prompt": total["prompt"], "completion": total["completion"], "total": total["total"]},
+        "cost_usd": round(total["cost_usd"], 6),
+        "cost_per_solved": round(total["cost_usd"] / pass_count, 6) if pass_count else 0.0,
+        "by_role": agg["by_role"],
+        "latency": {"total_ms": int(wall_s * 1000), "avg_ms": int(sum(latencies) / len(latencies)) if latencies else 0},
+        "per_problem": per_problem,
+        "reference": _reference_estimate(cfg, n, table),
+    }
+
+
+def _persist_lab_result(result: dict) -> None:
+    LAB_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    _safe_stack_file(result["stack"]).write_text(json.dumps(result, indent=2))
+
+
+def list_lab_results() -> list[dict]:
+    """Every persisted StackResult (results/lab/runs/*.json), newest first. Holds no keys."""
+    out: list[dict] = []
+    if not LAB_RUNS_DIR.exists():
+        return out
+    for p in sorted(LAB_RUNS_DIR.glob("*.json")):
+        data = _read_json(p)
+        if isinstance(data, dict):
+            out.append(data)
+    out.sort(key=lambda r: r.get("ts") or "", reverse=True)
+    return out
 
 
 def _mint_run_id() -> str:
@@ -112,6 +227,41 @@ class RunManager:
         """Begin a live BUILD run: the quartet builds a small project from a plain-language request.
         No large-model race; the Coder defaults to Groq gpt-oss-120b (run_config.apply_build_defaults)."""
         return self._start("build", build={"description": description, "project_type": project_type or "auto"})
+
+    def start_lab(self, stack_name: str, n: int = 5) -> dict:
+        """Begin a Stack Lab run: the quartet (this stack's models) over the n hardest HumanEval problems,
+        scored against the held-out tests, aggregating real token cost. No large-model race; the single
+        large reference is an estimate. Loading the stack makes it the active config. Persists
+        results/lab/runs/<stack>.json on completion. Stops any in-flight run first."""
+        self.stop()
+        run_id = _mint_run_id()
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            cfg = stacks.activate_stack(stack_name)  # writes run_config.json: whole system stays consistent
+        except (ValueError, FileNotFoundError, json.JSONDecodeError) as e:
+            with self._lock:
+                self.state = {"status": "error", "run_id": run_id, "task_id": "lab", "mode": "lab",
+                              "stack": stack_name, "started_at": now, "ended_at": now, "result": None,
+                              "warnings": [], "error": f"could not load stack: {str(e)[:120]}", "lab": None}
+            return self.status()
+        n = max(1, min(int(n or 5), _LAB_MAX_N))
+        fatal = _fatal_config_error(cfg)
+        if fatal:
+            with self._lock:
+                self.state = {"status": "error", "run_id": run_id, "task_id": "lab", "mode": "lab",
+                              "stack": stack_name, "started_at": now, "ended_at": now, "result": None,
+                              "warnings": [], "error": fatal, "lab": None}
+            return self.status()
+        with self._lock:
+            self.state = {
+                "status": "starting", "run_id": run_id, "task_id": "lab", "mode": "lab", "stack": stack_name,
+                "started_at": now, "ended_at": None, "result": None, "error": None,
+                "warnings": _preflight(cfg),
+                "lab": {"done": 0, "total": n, "passed": 0, "problems": []},
+            }
+            self._thread = threading.Thread(target=self._run_lab, args=(run_id, stack_name, n, cfg), daemon=True)
+            self._thread.start()
+        return self.status()
 
     def _start(self, task_id: str, build: dict | None) -> dict:
         """Shared launcher for race and build runs."""
@@ -252,6 +402,86 @@ class RunManager:
             for p in procs:
                 _terminate(p)
 
+    def _run_lab(self, run_id: str, stack_name: str, n: int, cfg: dict) -> None:
+        """Lab worker: long-lived agents run the n-problem subset (each in its own room), then aggregate
+        real token cost and persist the StackResult. No large-model race; the reference is an estimate."""
+        events_path = EVENTS_DIR / f"{run_id}.jsonl"
+        EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+        LOGS_DIR.mkdir(parents=True, exist_ok=True)
+        child_base = {**os.environ, "QUARTET_RUN_ID": run_id, "QUARTET_EVENTS_PATH": str(events_path), **_provider_key_env()}
+        child_base.pop("QUARTET_MODE", None)  # never inherit build mode into a lab run
+        started = time.monotonic()
+        try:
+            from orchestrator import conductor
+            from bench.dataset import get_problems
+
+            problems = get_problems(n)
+            client = conductor.make_client()
+            agent_ids = {role: get_agent(role)["agent_id"] for role in ROLES}
+            conductor_id = get_agent("conductor")["agent_id"]
+
+            # Long-lived agents for the whole subset (one set, not respawned per problem). They join each
+            # per-problem room via the RoomAddedEvent push, recovered by idle_resync if a push is missed.
+            for role in ROLES:
+                env = {**child_base, "LOCAL_BASE_URL": LOCAL_AGENTS_URL, **run_config.role_env(role, cfg)}
+                self._spawn(["-m", f"agents.{role}"], env, run_id, role)
+            self._set_status("running")
+
+            if not self._wait_connected(events_path, _CONNECT_TIMEOUT):
+                if self._stopped():
+                    return
+                self._warn("agents did not all connect to Band within the timeout")
+            time.sleep(_SETTLE_AFTER_CONNECT)
+            if self._stopped():
+                return
+
+            per_problem: list[dict] = []
+            for i, problem in enumerate(problems):
+                if self._stopped():
+                    break
+                t0 = time.monotonic()
+                try:
+                    record = conductor.run_problem(
+                        client, problem, agent_ids, conductor_id,
+                        _LAB_PROBLEM_TIMEOUT, _DRIVE_POLL, _LAB_SETTLE, should_stop=self._stopped,
+                    )
+                except Exception as e:  # noqa: BLE001 - one bad room must not sink the subset
+                    record = {"task_id": problem["task_id"], "status": "ERROR", "passed": False, "error": str(e)[:200]}
+                per_problem.append({
+                    "task_id": problem["task_id"], "passed": bool(record.get("passed")),
+                    "status": record.get("status"), "latency_ms": int((time.monotonic() - t0) * 1000),
+                    "error": record.get("error"),
+                })
+                with self._lock:
+                    lab = dict(self.state.get("lab") or {"done": 0, "total": n, "passed": 0, "problems": []})
+                    lab.update({"done": i + 1, "passed": sum(1 for r in per_problem if r["passed"]), "problems": per_problem})
+                    self.state = {**self.state, "lab": lab}
+
+            # Tear agents down before aggregating (frees the model slots; events are already on disk).
+            with self._lock:
+                procs, self._procs, self._agents = self._procs, [], []
+            for p in procs:
+                _terminate(p)
+            if self._stopped():
+                return
+
+            result = _aggregate_lab(stack_name, run_id, cfg, problems, per_problem,
+                                    read_events(str(events_path)), time.monotonic() - started)
+            _persist_lab_result(result)
+            with self._lock:
+                if self.state.get("status") != "stopped":
+                    self.state = {**self.state, "status": "done", "result": result,
+                                  "ended_at": datetime.now(timezone.utc).isoformat()}
+        except Exception as e:  # noqa: BLE001 - report the failure, never crash the server thread
+            with self._lock:
+                self.state = {**self.state, "status": "error", "error": str(e)[:300],
+                              "ended_at": datetime.now(timezone.utc).isoformat()}
+        finally:
+            with self._lock:
+                procs, self._procs, self._agents = self._procs, [], []
+            for p in procs:
+                _terminate(p)
+
     # ---- helpers ----
 
     def _spawn(self, args: list[str], env: dict, run_id: str, label: str) -> None:
@@ -337,10 +567,10 @@ def _missing_key_message(provider: str) -> str:
             "(Build your stack), or as `aiml_api_key: <key>` in agent_config.yaml / AIML_API_KEY in .env. "
             "The band_ keys authenticate the Band chat room, not model inference - aimlapi needs its own."
         )
-    if provider == "groq":
+    if provider in _KEY_ENV_VARS:
         return (
-            "agents/large use the groq provider but no groq key is set. Add it in the dashboard "
-            "(Build your stack), or set GROQ_API_KEY in .env."
+            f"agents/large use the {provider} provider but no {provider} key is set. Add it in the "
+            f"dashboard (Build your stack), or set {_KEY_ENV_VARS[provider]} in .env."
         )
     return (
         "agents/large use the openai_compatible provider but no base_url is set. Add it in the dashboard "
@@ -409,6 +639,10 @@ def _provider_base_key(provider: str) -> tuple[str | None, str | None]:
         return GROQ_BASE_URL, provider_secret("groq").get("api_key")
     if provider == "aimlapi":
         return AIMLAPI_BASE_URL, provider_secret("aimlapi").get("api_key")
+    if provider == "gemini":
+        return GEMINI_BASE_URL, provider_secret("gemini").get("api_key")
+    if provider == "openrouter":
+        return OPENROUTER_BASE_URL, provider_secret("openrouter").get("api_key")
     if provider == "openai_compatible":
         secret = provider_secret("openai_compatible")
         return secret.get("base_url"), secret.get("api_key")
@@ -425,7 +659,8 @@ def list_provider_models(provider: str) -> dict:
     base, key = _provider_base_key(provider)
     if not base:
         return {"models": [], "note": "no base_url set for this provider"}
-    if provider in _KEYED_PROVIDERS and not key and provider != "openai_compatible":
+    # openrouter and openai_compatible expose /models without auth, so list them even before a key.
+    if provider in _KEYED_PROVIDERS and not key and provider not in ("openai_compatible", "openrouter"):
         return {"models": [], "note": "no key set for this provider"}
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     try:

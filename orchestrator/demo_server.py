@@ -23,6 +23,10 @@ Endpoints:
   POST /api/stacks  {name, config}                 save a named stack (Save As)
   POST /api/stacks/load {name}                     load a stack into the active config
   POST /api/stacks/duplicate {name, new_name}      copy a stack under a new name
+  POST /api/lab/run {stack, n}                      benchmark one stack over n HumanEval problems
+  GET  /api/lab/results                             persisted per-stack lab results (no keys)
+  GET  /api/lab/pricing                             the editable per-model price table
+  POST /api/lab/pricing {table | {model,input,output}}  update the price table
   GET  /api/agents                                 live run + agent process status
   POST /api/run     {task_id}                      start a real live Quartet run + large race
   POST /api/build   {description, project_type, stack?}  start a live BUILD run (multi-file project)
@@ -35,9 +39,10 @@ Anything else is served from the built frontend at web/dist/ (SPA fallback to in
 Process-spawning + key POSTs require localhost or the X-Quartet-Token shared token (tunnel access);
 keys live in memory only and are never returned. CORS echoes QUARTET_ALLOWED_ORIGINS + localhost.
 
-Cost note: cost_usd is derived here from a small static price map times the token counts in the
-results files. Local-provider runs frequently report total_tokens=0 (the OpenAI-compatible server
-omits usage), so cost is only meaningful for aimlapi runs or the bundled sample.
+Cost note: cost_usd is derived from the editable per-model price table (bench.pricing,
+results/lab/pricing.json) times the token counts in the results files. Local-provider runs frequently
+report total_tokens=0 (the OpenAI-compatible server omits usage), so cost is only meaningful for hosted
+providers (groq / gemini / openrouter / aimlapi) or the bundled sample.
 
 Run: uv run python -m orchestrator.demo_server  [--host 127.0.0.1] [--port 8000]
 """
@@ -55,10 +60,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from bench import pricing
 from bench.events import read_events
 from orchestrator import run_config, stacks
 from orchestrator.config import key_status, save_provider_key
-from orchestrator.runner import RunManager, list_provider_models, validate_provider
+from orchestrator.runner import RunManager, list_lab_results, list_provider_models, validate_provider
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
@@ -78,17 +84,6 @@ RUNS = RunManager()
 _RUN_ID_OK = re.compile(r"^[A-Za-z0-9._-]+$")  # guards the run_id -> filename mapping (no traversal)
 _REPLAY_GAP_CAP = 2.0  # never sit on dead air longer than this between two replayed events
 _LIVE_POLL = 0.3       # seconds between polls when tailing an active run
-
-# Illustrative price tiers ($ per 1M tokens). Quartet agents are the small tier; the 32B baseline is
-# the large tier. Verify against aimlapi.com/models before quoting these as real.
-_PRICE_PER_1M = {"small": 0.20, "large": 0.80}
-_LARGE_HINTS = ("32b", "34b", "70b", "72b", "large")
-
-
-def _price_per_token(model: str) -> float:
-    tier = "large" if any(h in (model or "").lower() for h in _LARGE_HINTS) else "small"
-    return _PRICE_PER_1M[tier] / 1_000_000
-
 
 def _read_json(path: Path):
     try:
@@ -187,7 +182,10 @@ def build_results() -> dict:
         pass_rate = float(data.get("pass_rate", (pass_count / total if total else 0.0)))
         tokens = int(data.get("total_tokens", 0))
         model = data.get("model", "")
-        cost_usd = tokens * _price_per_token(model)
+        # These baseline/quartet records carry only a token total, so split it by the same assumed
+        # input/output fraction the lab uses and price it through the editable table (bench.pricing).
+        prompt = int(tokens * 0.6)
+        cost_usd = pricing.cost_usd(model, prompt, tokens - prompt)
         configs.append({
             "key": key,
             "label": label,
@@ -298,6 +296,30 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": f"could not duplicate stack: {str(e)[:120]}"}, status=400)
             return
         self._send_json({"saved": copy, "stacks": stacks.list_stacks()})
+
+    # ---- control plane: stack lab ----
+
+    def _handle_lab_run(self, body: dict) -> None:
+        stack = (body.get("stack") or "").strip()
+        if not stack:
+            self._send_json({"error": "stack required"}, status=400)
+            return
+        try:
+            n = int(body.get("n") or 5)
+        except (TypeError, ValueError):
+            n = 5
+        self._send_json(RUNS.start_lab(stack, n))
+
+    def _handle_pricing_save(self, body: dict) -> None:
+        # Accept a full table {model:{input,output}}, a {"table": {...}} wrapper, or a single
+        # {model, input, output} row. save_pricing merges over the current table.
+        if isinstance(body.get("table"), dict):
+            table = body["table"]
+        elif isinstance(body.get("model"), str):
+            table = {body["model"]: {"input": body.get("input"), "output": body.get("output")}}
+        else:
+            table = body or {}
+        self._send_json(pricing.save_pricing(table))
 
     # ---- control plane: build runs ----
 
@@ -416,6 +438,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(list_provider_models(provider))
             elif path == "/api/stacks":
                 self._send_json({"stacks": stacks.list_stacks()})
+            elif path == "/api/lab/results":
+                self._send_json({"results": list_lab_results()})
+            elif path == "/api/lab/pricing":
+                self._send_json(pricing.load_pricing())
             elif path == "/api/project":
                 self._send_project(parse_qs(parsed.query))
             elif path == "/api/project/file":
@@ -464,6 +490,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_load_stack(self._read_body() or {})
             elif path == "/api/stacks/duplicate":
                 self._handle_duplicate_stack(self._read_body() or {})
+            elif path == "/api/lab/run":
+                self._handle_lab_run(self._read_body() or {})
+            elif path == "/api/lab/pricing":
+                self._handle_pricing_save(self._read_body() or {})
             else:
                 self._send_json({"error": "not found"}, status=404)
         except (BrokenPipeError, ConnectionResetError):
@@ -587,11 +617,14 @@ class Handler(BaseHTTPRequestHandler):
                     except json.JSONDecodeError:
                         continue
                     self._sse(ev)
-                    # The challenger emits its own scored event; the run ends only when the
-                    # conductor scores the Quartet (pass, fail, or timeout all reach here).
+                    # The challenger emits its own scored event; a single race/build run ends when the
+                    # conductor scores the Quartet. A lab scores every problem, so do NOT end there:
+                    # keep streaming until the whole lab run is terminal (caught by the idle branch).
                     if ev.get("type") == "scored" and ev.get("role") == "conductor":
-                        self._sse({}, event="end")
-                        return
+                        st = RUNS.status()
+                        if st.get("run_id") != run_id or st.get("mode") != "lab" or not st.get("active"):
+                            self._sse({}, event="end")
+                            return
             else:
                 idle += _LIVE_POLL
                 # End promptly if this run reached a terminal state without a conductor scored event

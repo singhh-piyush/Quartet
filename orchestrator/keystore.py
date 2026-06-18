@@ -18,7 +18,7 @@ _LOCK = threading.Lock()
 # provider -> {"api_key": str, "base_url": str}. Only the providers that take a key appear here.
 _KEYS: dict[str, dict] = {}
 
-KEYED_PROVIDERS = ("groq", "aimlapi", "openai_compatible")
+KEYED_PROVIDERS = ("groq", "aimlapi", "gemini", "openrouter", "openai_compatible")
 
 
 def set_key(provider: str, api_key: str | None = None, base_url: str | None = None) -> None:

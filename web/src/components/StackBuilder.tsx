@@ -4,6 +4,7 @@ import { KEYED_PROVIDERS, PROVIDERS } from "../types";
 import type { ModelConfig, ModelSlot, RunStatus, ValidateResult } from "../types";
 import { useStacks } from "../useStacks";
 import { ModelDashboard } from "./ModelDashboard";
+import { SecretInput } from "./SecretInput";
 
 const ROLES = ["spec", "coder", "tester", "repairer"] as const;
 
@@ -13,6 +14,15 @@ const SEED_MODELS: Record<string, string[]> = {
   local: ["local-model"],
   groq: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
   aimlapi: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini", "gpt-5", "claude-sonnet-4-6", "claude-opus-4-8"],
+  gemini: ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"],
+  openrouter: [
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "meta-llama/llama-3.3-70b-instruct",
+    "google/gemini-2.5-flash",
+    "anthropic/claude-sonnet-4",
+    "deepseek/deepseek-chat",
+  ],
   openai_compatible: [],
 };
 
@@ -33,12 +43,28 @@ const ROLE_DEFAULTS: Record<string, Record<string, string>> = {
     repairer: "gpt-4o",
     large: "claude-opus-4-8",
   },
+  gemini: {
+    spec: "gemini-2.5-flash-lite",
+    coder: "gemini-2.5-flash",
+    tester: "gemini-2.5-flash-lite",
+    repairer: "gemini-2.5-flash",
+    large: "gemini-2.5-pro",
+  },
+  openrouter: {
+    spec: "openai/gpt-oss-20b",
+    coder: "openai/gpt-oss-120b",
+    tester: "meta-llama/llama-3.3-70b-instruct",
+    repairer: "openai/gpt-oss-120b",
+    large: "anthropic/claude-sonnet-4",
+  },
 };
 
 const providerLabel: Record<string, string> = {
   local: "Local",
   groq: "Groq",
   aimlapi: "AI/ML API",
+  gemini: "Gemini",
+  openrouter: "OpenRouter",
   openai_compatible: "OpenAI-compatible",
 };
 
@@ -59,19 +85,14 @@ export function StackBuilder({
 }) {
   const sx = useStacks();
   const [provider, setProvider] = useState<string>("groq");
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-  const [validation, setValidation] = useState<ValidateResult | null>(null);
-  const [validating, setValidating] = useState(false);
   const [selected, setSelected] = useState("");
   const [saveName, setSaveName] = useState("");
   const [advanced, setAdvanced] = useState(false);
 
   const needsKey = (KEYED_PROVIDERS as readonly string[]).includes(provider);
-  const hasKey = !!sx.keys[provider]?.has_key;
 
   // Providers currently referenced by the stack, plus the one being configured, so their model lists
-  // are ready for the dropdowns.
+  // are ready for the dropdowns and every key they need has a field.
   const usedProviders = useMemo(() => {
     const set = new Set<string>([provider]);
     if (models) {
@@ -81,35 +102,18 @@ export function StackBuilder({
     return [...set];
   }, [models, provider]);
 
+  // Every keyed provider in play, so the advanced per-role mixing always has a place to enter its key.
+  const keyedUsed = usedProviders.filter((p) => (KEYED_PROVIDERS as readonly string[]).includes(p));
+
   useEffect(() => {
     for (const p of usedProviders) sx.loadProviderModels(p);
     // sx.loadProviderModels is stable enough for this lazy prime; avoid re-running on its identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [usedProviders.join(",")]);
 
-  // Reset validation + prefill the openai_compatible base when switching provider.
-  useEffect(() => {
-    setValidation(null);
-    setApiKey("");
-    setBaseUrl(sx.keys[provider]?.base_url ?? "");
-  }, [provider, sx.keys]);
-
   const optionsFor = (p: string): string[] => {
     const live = sx.providerModels[p]?.models ?? [];
     return live.length ? live : SEED_MODELS[p] ?? [];
-  };
-
-  const onSaveKey = () => {
-    if (!apiKey.trim() && !(provider === "openai_compatible" && baseUrl.trim())) return;
-    sx.saveProviderKey(provider, apiKey.trim(), provider === "openai_compatible" ? baseUrl.trim() : undefined);
-    setApiKey("");
-  };
-
-  const onValidate = () => {
-    setValidating(true);
-    sx.validate(provider)
-      .then(setValidation)
-      .finally(() => setValidating(false));
   };
 
   const applyToAll = () => {
@@ -186,7 +190,7 @@ export function StackBuilder({
 
       <div className="h-px bg-[var(--line)]" />
 
-      {/* Provider + key + validate */}
+      {/* Provider quick-apply + a key field for every keyed provider the stack uses */}
       <div className="space-y-2">
         <div className="flex flex-wrap items-center gap-2">
           <span className="w-20 shrink-0 font-mono text-[11px] uppercase tracking-widest text-[var(--text-3)]">provider</span>
@@ -207,66 +211,26 @@ export function StackBuilder({
           >
             Use for all roles
           </button>
-          {needsKey && (
-            <span
-              className="ml-auto rounded-full px-2 py-0.5 font-mono text-[11px]"
-              style={{
-                background: hasKey ? "rgba(52,211,153,0.12)" : "rgba(255,255,255,0.06)",
-                color: hasKey ? "var(--pass)" : "var(--text-3)",
-              }}
-            >
-              {hasKey ? "key set" : "no key"}
+          {needsKey && !keyedUsed.includes(provider) && (
+            <span className="ml-auto font-mono text-[10.5px] text-[var(--text-3)]">
+              add {providerLabel[provider] ?? provider} below to enter its key
             </span>
           )}
         </div>
 
-        {needsKey && (
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="w-20 shrink-0 font-mono text-[11px] uppercase tracking-widest text-[var(--text-3)]">key</span>
-            {provider === "openai_compatible" && (
-              <input
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://host/v1"
-                spellCheck={false}
-                className="w-56 rounded-md border border-[var(--line)] bg-black/60 px-2.5 py-1.5 font-mono text-[12px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
+        {keyedUsed.length > 0 && (
+          <div className="space-y-2 rounded-lg border border-[var(--line)] bg-black/30 p-2.5">
+            <span className="font-mono text-[10.5px] uppercase tracking-widest text-[var(--text-3)]">provider keys</span>
+            {keyedUsed.map((p) => (
+              <ProviderKeyRow
+                key={p}
+                provider={p}
+                label={providerLabel[p] ?? p}
+                status={sx.keys[p]}
+                onSave={(apiKey, baseUrl) => sx.saveProviderKey(p, apiKey, baseUrl)}
+                onValidate={() => sx.validate(p)}
               />
-            )}
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={hasKey ? "key stored (enter to replace)" : "paste api key"}
-              spellCheck={false}
-              autoComplete="off"
-              className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-black/60 px-2.5 py-1.5 font-mono text-[12px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
-            />
-            <button
-              onClick={onSaveKey}
-              className="rounded-md border border-[var(--line)] px-3 py-1.5 font-sans text-sm font-semibold text-[var(--text-2)] transition-colors hover:text-white"
-            >
-              Save key
-            </button>
-            <button
-              onClick={onValidate}
-              disabled={validating}
-              className="rounded-md border border-[var(--line)] px-3 py-1.5 font-sans text-sm font-semibold text-[var(--text-2)] transition-colors hover:text-white disabled:opacity-40"
-            >
-              {validating ? "checking..." : "Validate"}
-            </button>
-          </div>
-        )}
-
-        {validation && (
-          <div
-            className="rounded-md px-3 py-1.5 font-mono text-[12px]"
-            style={{
-              background: validation.ok ? "rgba(52,211,153,0.1)" : "rgba(248,113,113,0.1)",
-              color: validation.ok ? "var(--pass)" : "var(--fail)",
-            }}
-          >
-            {validation.ok ? "ok: " : "failed: "}
-            {validation.detail}
+            ))}
           </div>
         )}
       </div>
@@ -333,6 +297,7 @@ export function StackBuilder({
           models={models}
           status={status}
           saving={saving}
+          keys={sx.keys}
           onSlot={(t, m) => onUpdate(t, { model: m })}
           onProvider={(t, p) => onUpdate(t, { provider: p })}
         />
@@ -377,6 +342,103 @@ function ModelRow({
         className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-black/60 px-2.5 py-1.5 font-mono text-[12.5px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
         placeholder={options[0] ?? "model id"}
       />
+    </div>
+  );
+}
+
+// One row per keyed provider used by the stack: paste a key (with show/hide), Save, Validate, status.
+// This is the single place keys are entered, so the advanced per-role provider mixing has one too.
+function ProviderKeyRow({
+  provider,
+  label,
+  status,
+  onSave,
+  onValidate,
+}: {
+  provider: string;
+  label: string;
+  status?: { has_key: boolean; base_url?: string };
+  onSave: (apiKey: string, baseUrl?: string) => Promise<unknown>;
+  onValidate: () => Promise<ValidateResult>;
+}) {
+  const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState(status?.base_url ?? "");
+  const [validation, setValidation] = useState<ValidateResult | null>(null);
+  const [validating, setValidating] = useState(false);
+  const hasKey = !!status?.has_key;
+  const isOC = provider === "openai_compatible";
+
+  useEffect(() => {
+    if (isOC && status?.base_url) setBaseUrl(status.base_url);
+  }, [isOC, status?.base_url]);
+
+  const save = () => {
+    if (!apiKey.trim() && !(isOC && baseUrl.trim())) return;
+    onSave(apiKey.trim(), isOC ? baseUrl.trim() : undefined);
+    setApiKey("");
+  };
+  const validate = () => {
+    setValidating(true);
+    onValidate()
+      .then(setValidation)
+      .finally(() => setValidating(false));
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="w-24 shrink-0 font-mono text-[11px] text-[var(--text-2)]">{label}</span>
+        {isOC && (
+          <input
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            placeholder="https://host/v1"
+            spellCheck={false}
+            className="w-52 rounded-md border border-[var(--line)] bg-black/60 px-2.5 py-1.5 font-mono text-[12px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
+          />
+        )}
+        <SecretInput
+          value={apiKey}
+          onChange={setApiKey}
+          onEnter={save}
+          placeholder={hasKey ? "key stored (enter to replace)" : "paste api key"}
+          className="flex-1"
+        />
+        <button
+          onClick={save}
+          className="rounded-md border border-[var(--line)] px-3 py-1.5 font-sans text-sm font-semibold text-[var(--text-2)] transition-colors hover:text-white"
+        >
+          Save
+        </button>
+        <button
+          onClick={validate}
+          disabled={validating}
+          className="rounded-md border border-[var(--line)] px-3 py-1.5 font-sans text-sm font-semibold text-[var(--text-2)] transition-colors hover:text-white disabled:opacity-40"
+        >
+          {validating ? "checking..." : "Validate"}
+        </button>
+        <span
+          className="rounded-full px-2 py-0.5 font-mono text-[10.5px]"
+          style={{
+            background: hasKey ? "rgba(52,211,153,0.12)" : "rgba(255,255,255,0.06)",
+            color: hasKey ? "var(--pass)" : "var(--text-3)",
+          }}
+        >
+          {hasKey ? "key set" : "no key"}
+        </span>
+      </div>
+      {validation && (
+        <div
+          className="rounded-md px-3 py-1.5 font-mono text-[11.5px]"
+          style={{
+            background: validation.ok ? "rgba(52,211,153,0.1)" : "rgba(248,113,113,0.1)",
+            color: validation.ok ? "var(--pass)" : "var(--fail)",
+          }}
+        >
+          {validation.ok ? "ok: " : "failed: "}
+          {validation.detail}
+        </div>
+      )}
     </div>
   );
 }
