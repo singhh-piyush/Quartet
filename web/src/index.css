@@ -77,39 +77,41 @@ body::after {
   box-shadow: var(--elevate);
 }
 
-/* The agent rail shows the glow on whichever agent is working, and hands it off to the next on a handoff,
-   driven by the flow conductor (a single rAF in AgentRail.tsx that writes opacity / CSS vars straight to the
-   elements). The circling glow (`.flow-ring`) IS the card's own rounded-rect border: a conic-gradient masked
-   to a thin rounded-rect band (`mask-composite: exclude`, the standard gradient-border recipe) so it hugs the
-   card's `rounded-lg` outline, and the masked-out centre keeps the card text clear. A bright arc rides that
-   band and circles it by animating the `@property --angle` sweep (smooth, no box rotation). The conductor only
-   toggles its opacity (active card) and `--flow-color`. A handoff fades the source ring out, fills the
-   connector across (`.flow-conn`, `--progress`), and fades the destination ring in. Disabled under
-   prefers-reduced-motion (static even outline). */
+/* The agent rail shows ONE continuous glowing light: it circles the working agent's card border, then on a
+   handoff travels across the connector and circles the next card. It is driven by the flow conductor (a single
+   rAF in AgentRail.tsx that writes `--angle` / `--progress` / opacity / colour straight to the elements). The
+   ring (`.flow-ring`) IS the card's own rounded-rect border: a conic-gradient masked to a thin rounded-rect
+   band (`mask-composite: exclude`, the standard gradient-border recipe) so it hugs the `rounded-lg` outline,
+   and the masked-out centre keeps the card text clear. A bright arc rides that band; the conductor advances
+   `--angle` to circle it, sweeps it to the connector-facing edge for a handoff, and resumes it on the next
+   card at the connector-facing edge - so the light never jumps. The connector light (`.flow-conn`) is styled
+   IDENTICALLY (same colour, same soft blur + glow) and travels the gap (`--progress`), so the handoff matches
+   the circling and reads as the same single line. Disabled under prefers-reduced-motion (static even
+   outline). */
 
 .flow-ring {
   position: absolute;
   inset: -2px; /* sit just outside the card's border box */
   z-index: 2; /* render ABOVE the card so the glowing outline shows (it is only a thin masked band) */
   border-radius: 10px; /* card rounded-lg(8px) + 2px inset, stays concentric with the outline */
-  padding: 2px; /* thickness of the visible ring band */
+  padding: 2.5px; /* thickness of the visible ring band */
   pointer-events: none;
   opacity: 0; /* conductor drives this; cross-fades via the transition below */
-  transition: opacity 220ms linear;
-  /* a bright arc whose position around the ring is the animated --angle */
+  transition: opacity 240ms linear;
+  /* a bright arc whose position around the ring is --angle (driven per-frame by the conductor in AgentRail so
+     the circling and the handoff are one continuous light - NOT a self-contained CSS spin) */
   background: conic-gradient(
     from var(--angle, 0deg),
     transparent 0deg,
-    var(--flow-color, #fff) 55deg,
-    transparent 130deg
+    var(--flow-color, #fff) 70deg,
+    transparent 150deg
   );
   /* mask to just the padding band -> only the rounded-rect outline shows, centre stays clear */
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  /* soften the band into a glow that bleeds outward from the outline */
-  filter: blur(2px) drop-shadow(0 0 5px var(--flow-color, #fff));
-  animation: flowSpin 4600ms linear infinite; /* slow, smooth circling of the arc */
+  /* a strong glow: tight bright halo + soft wide bloom, same colour, so the outline really glows */
+  filter: blur(2.5px) drop-shadow(0 0 6px var(--flow-color, #fff)) drop-shadow(0 0 14px var(--flow-color, #fff));
 }
 
 @property --angle {
@@ -118,39 +120,33 @@ body::after {
   inherits: false;
 }
 
-@keyframes flowSpin {
-  to {
-    --angle: 360deg;
-  }
-}
-
-/* connector handoff: a short bright comet streak TRAVELS across the gap, so the light reads as one continuous
-   moving thing rather than a line being drawn. It is full-size from the instant it launches (unlike a scaleX
-   fill, which is near-zero early and reads as a separate "line drawing in" beat after the ring fades).
-   `--progress` (0..1) is its position across the gap: it launches centred on the source card edge and slides
-   to the destination card edge, overshooting slightly so it connects to both rings. `--pf`/`--pt` are the
-   source/destination colours (tail -> head); the glow is a box-shadow. */
+/* connector handoff: the SAME light continues across the gap. It is a soft glowing blob styled identically to
+   the ring's arc (same colour, same blur + double drop-shadow bloom), so when the arc sweeps off a card edge
+   and this picks it up there is no visible change of material - it reads as one continuous travelling light,
+   not a separate "line" animation. `--progress` (0..1) is its position across the gap: it launches centred on
+   the source card's connector-facing edge (where the arc just exited) and slides to the destination edge,
+   overshooting slightly so it overlaps both rings for a seamless cross-fade. `--pf` is the travelling colour
+   (the source agent's, or fail-red on a repair bounce). */
 .flow-conn {
   position: absolute;
   top: 50%;
   left: 0;
-  width: 16px;
-  height: 3px;
-  margin-top: -1.5px;
+  width: 22px;
+  height: 2.5px;
+  margin-top: -1.25px;
   border-radius: 9999px;
   pointer-events: none;
   opacity: 0;
-  background: linear-gradient(to right, var(--pf, #fff), var(--pt, #fff));
-  box-shadow: 0 0 12px 3px var(--pt, #fff);
+  background: linear-gradient(to right, transparent, var(--pf, #fff) 40%, var(--pf, #fff) 60%, transparent);
+  filter: blur(2.5px) drop-shadow(0 0 6px var(--pf, #fff)) drop-shadow(0 0 14px var(--pf, #fff));
   /* travel across the gap on the compositor (no per-frame layout): centre goes 0 -> 32px (the w-8 connector
-     width); the -8px centres the 16px streak so it overshoots into both cards. Keep 32px in sync with w-8. */
-  transform: translateX(calc(var(--progress, 0) * 32px - 8px));
-  transition: opacity 170ms linear;
+     width); the -11px centres the 22px blob so it overshoots into both cards. Keep 32px in sync with w-8. */
+  transform: translateX(calc(var(--progress, 0) * 32px - 11px));
+  transition: opacity 200ms linear;
 }
 
 .flow-conn[data-dir="rev"] {
-  background: linear-gradient(to left, var(--pf, #fff), var(--pt, #fff));
-  transform: translateX(calc((1 - var(--progress, 0)) * 32px - 8px)); /* repair bounce: travel right -> left */
+  transform: translateX(calc((1 - var(--progress, 0)) * 32px - 11px)); /* repair bounce: travel right -> left */
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -5,9 +5,17 @@ import { useFlowState, type FlowSegment } from "../useFlowState";
 import { AgentCard } from "./AgentCard";
 
 const FAIL = "#f43f5e";
-const CROSS_MS = 680; // time to fill one connector gap
+const CROSS_MS = 680; // time the light takes to travel one connector gap
+const EXIT_MS = 240; // time the arc takes to sweep to the connector-facing edge before it crosses
+const SPIN_MS = 4600; // period of one full revolution while the arc rests on a card
+const SPIN_RATE = 360 / SPIN_MS; // deg per ms
+const ARC_PEAK = 70; // offset of the conic arc's bright centre from --angle (matches the gradient in index.css)
+const RIGHT = 90; // conic angle (from top, clockwise) of a card's right-edge midpoint
+const LEFT = 270; // conic angle of a card's left-edge midpoint
+// clockwise sweep distance from one angle to another, so the arc keeps spinning the same way into a handoff
+const cwDelta = (from: number, to: number) => (((to - from) % 360) + 360) % 360;
 
-type Phase = "idle" | "rest" | "cross";
+type Phase = "idle" | "rest" | "exit" | "cross";
 interface Step {
   conn: number; // connector index crossed (between signalOrder[i] and [i+1])
   dir: 1 | -1; // 1 = forward (left->right), -1 = repair bounce (right->left)
@@ -19,8 +27,12 @@ interface Light {
   card: Role | null; // the card the glow currently rests on
   repair: boolean;
   steps: Step[]; // remaining connector hops of the active segment
-  conn: number; // connector being filled now
+  conn: number; // connector being crossed now
   crossStart: number;
+  angle: number; // current --angle of the arc (one continuous value across rest/exit/land)
+  exitFrom: number; // angle when the exit sweep began
+  exitDelta: number; // clockwise distance the exit sweep covers to reach the connector-facing edge
+  exitStart: number;
   lastTs: number;
   queue: FlowSegment[];
   want: { activeRole: Role | null; finished: boolean };
@@ -35,6 +47,10 @@ function newLight(): Light {
     steps: [],
     conn: 0,
     crossStart: 0,
+    angle: 0,
+    exitFrom: 0,
+    exitDelta: 0,
+    exitStart: 0,
     lastTs: 0,
     queue: [],
     want: { activeRole: null, finished: false },
@@ -88,6 +104,7 @@ export function AgentRail({
 
   // imperative writers (touch only refs)
   const ringColor = (r: Role, c: string) => ringRefs.current[r]?.style.setProperty("--flow-color", c);
+  const ringAngle = (r: Role, a: number) => ringRefs.current[r]?.style.setProperty("--angle", `${a}deg`);
   const ringOp = (r: Role, o: number) => {
     const e = ringRefs.current[r];
     if (e) e.style.opacity = String(o);
@@ -133,13 +150,15 @@ export function AgentRail({
     setCurrentRole(!room.finished ? room.activeRole : null);
   }, [room.activeRole, room.finished]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // the conductor: the glow rests (the CSS arc circles the card's border ring) on the current card; a handoff
-  // fades it out, fills the connector(s) across, and fades the destination ring in. The only per-frame work
-  // here is the connector fill - the ring's circling is pure CSS.
+  // the conductor: ONE light. It rests on the current card while the arc circles the border (we advance
+  // `--angle` per frame), then on a handoff it sweeps the arc to the connector-facing edge (exit), travels
+  // the gap as the connector blob (cross), and resumes circling on the next card from its connector-facing
+  // edge (land) - so the angle is continuous and the circling and the handoff are the same single line.
   useEffect(() => {
     if (reduced) return;
     let raf = 0;
     const L = light.current;
+    const ownColor = (r: Role) => roleMeta[r].color;
 
     const pushCurrent = (r: Role | null) => {
       if (r !== L.shownCurrent) {
@@ -152,16 +171,25 @@ export function AgentRail({
       L.card = r;
       L.phase = "rest";
       L.steps = [];
-      ringColor(r, roleMeta[r].color);
+      ringColor(r, ownColor(r));
+      ringAngle(r, L.angle); // keep the arc where it was, just on the new card
       ringOp(r, 1);
+    };
+    // sweep the resting arc to the edge that faces the connector it is about to cross (clockwise, so it does
+    // not visually reverse), then fade the ring and hand the light to the connector
+    const startExit = (step: Step, ts: number) => {
+      L.phase = "exit";
+      const target = (step.dir === 1 ? RIGHT : LEFT) - ARC_PEAK; // --angle that puts the bright peak on the edge
+      L.exitFrom = L.angle;
+      L.exitDelta = cwDelta(L.angle, target);
+      L.exitStart = ts;
     };
     const startCross = (step: Step, ts: number) => {
       L.phase = "cross";
       L.conn = step.conn;
       L.crossStart = ts;
-      const pf = L.repair ? FAIL : roleMeta[step.from].color;
-      const pt = L.repair ? FAIL : roleMeta[step.next].color;
-      connMeta(step.conn, step.dir, pf, pt);
+      const col = L.repair ? FAIL : ownColor(step.from); // the light carries its source colour across
+      connMeta(step.conn, step.dir, col, col);
       connProg(step.conn, 0);
       connOp(step.conn, 1);
     };
@@ -170,25 +198,29 @@ export function AgentRail({
       if (L.card !== seg.from) snapTo(seg.from);
       L.steps = pathSteps(seg.from, seg.to);
       if (L.steps.length === 0) return;
-      ringOp(seg.from, 0); // the working glow leaves the source card
-      startCross(L.steps[0], ts);
+      ringColor(seg.from, L.repair ? FAIL : ownColor(seg.from));
+      ringOp(seg.from, 1);
+      startExit(L.steps[0], ts);
     };
     const land = (ts: number) => {
-      const step = L.steps[0];
-      connOp(step.conn, 0); // the filled connector fades out
-      L.steps.shift();
+      const step = L.steps.shift()!;
+      connOp(step.conn, 0); // the travelling blob fades out as the destination ring takes over
       L.card = step.next;
-      if (L.steps.length > 0) {
-        startCross(L.steps[0], ts); // intermediate gap of a multi-hop bounce - keep flowing, no card glow
-      } else {
-        ringColor(step.next, roleMeta[step.next].color); // settle to the agent's own colour
-        ringOp(step.next, 1); // destination glow fades in
+      const finalHop = L.steps.length === 0;
+      L.angle = (step.dir === 1 ? LEFT : RIGHT) - ARC_PEAK; // resume on the edge the light arrives at
+      ringColor(step.next, !finalHop && L.repair ? FAIL : ownColor(step.next));
+      ringAngle(step.next, L.angle);
+      ringOp(step.next, 1);
+      if (finalHop) {
         L.phase = "rest";
         pushCurrent(step.next);
+      } else {
+        startExit(L.steps[0], ts); // multi-hop bounce: immediately sweep on toward the next gap
       }
     };
 
     const tick = (ts: number) => {
+      const dt = L.lastTs ? ts - L.lastTs : 16;
       L.lastTs = ts;
       const { activeRole, finished } = L.want;
 
@@ -210,7 +242,17 @@ export function AgentRail({
       }
 
       if (L.phase === "rest") {
+        L.angle = (L.angle + SPIN_RATE * dt) % 360;
+        if (L.card) ringAngle(L.card, L.angle);
         if (L.queue.length) beginSegment(L.queue.shift()!, ts);
+      } else if (L.phase === "exit") {
+        const t = Math.min((ts - L.exitStart) / EXIT_MS, 1);
+        L.angle = L.exitFrom + L.exitDelta * t;
+        if (L.card) ringAngle(L.card, L.angle);
+        if (t >= 1) {
+          if (L.card) ringOp(L.card, 0); // arc has reached the edge: hand off to the connector blob
+          startCross(L.steps[0], ts);
+        }
       } else if (L.phase === "cross") {
         const t = Math.min((ts - L.crossStart) / CROSS_MS, 1);
         connProg(L.conn, t);
@@ -236,8 +278,8 @@ export function AgentRail({
 
   return (
     <div>
-      {/* md+: a thin glowing ring hugs each card's border; the current card's ring is on and a bright arc
-          slowly circles it, and a handoff fades it across the connector to the next card */}
+      {/* md+: a thin glowing ring hugs each card's border; the current card's arc circles it, and on a handoff
+          the SAME light sweeps to the edge and travels the connector blob to the next card (one continuous line) */}
       <div className="hidden items-stretch md:flex">
         {signalOrder.map((role, i) => (
           <Fragment key={role}>
