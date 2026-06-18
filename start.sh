@@ -200,4 +200,7 @@ echo "[start] opening $URL"
   || ( command -v open >/dev/null 2>&1 && open "$URL" >/dev/null 2>&1 ) \
   || echo "[start] open $URL in your browser."
 
-echo "[start] done. In the UI: Live mode -> pick a problem -> Run live (or Replay for the recorded run)."
+echo "[start] done. UI tabs: Build (describe a project, the quartet builds it) or Race (HumanEval live/replay)."
+echo "[start] tunnel: to drive this server from a deployed frontend, expose :8000 with a tunnel and set"
+echo "        QUARTET_ALLOWED_ORIGINS=<frontend origin> and QUARTET_API_TOKEN=<secret> before starting;"
+echo "        enter that token in the Build controls. Provider keys stay in memory only (never on disk)."

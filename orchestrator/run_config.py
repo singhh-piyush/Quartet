@@ -88,6 +88,23 @@ def save(cfg: dict) -> dict:
     return merged
 
 
+# Build-mode role defaults: the Coder runs Groq's gpt-oss-120b so a build produces good code fast in
+# the demo. Applied only to slots the user has not moved off the local placeholder (see
+# apply_build_defaults), so an explicit choice always wins.
+BUILD_DEFAULTS = {"coder": {"provider": "groq", "model": "openai/gpt-oss-120b"}}
+_LOCAL_PLACEHOLDERS = {_AGENTS_MODEL_DEFAULT, LOCAL_MODEL, "local-model"}
+
+
+def apply_build_defaults(cfg: dict) -> dict:
+    """Return cfg with BUILD_DEFAULTS overlaid onto any agent slot still at the local placeholder."""
+    out = {**cfg, "agents": {r: dict(s) for r, s in cfg["agents"].items()}, "large": dict(cfg["large"])}
+    for role, default in BUILD_DEFAULTS.items():
+        slot = out["agents"].get(role, {})
+        if slot.get("provider") == "local" and slot.get("model") in _LOCAL_PLACEHOLDERS:
+            out["agents"][role] = dict(default)
+    return out
+
+
 def role_env(role: str, cfg: dict | None = None) -> dict:
     """Env overrides to spawn one agent process with its selected provider/model."""
     cfg = cfg or load()

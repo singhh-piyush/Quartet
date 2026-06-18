@@ -27,6 +27,9 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import shutil
+import zipfile
+
 import httpx
 from band import BandConnectionError
 from band.client.rest import (
@@ -38,7 +41,7 @@ from band.client.rest import (
 )
 
 from bench.events import emit, read_events
-from bench.sandbox import run_tests
+from bench.sandbox import parse_manifest, run_project, run_tests
 from orchestrator.config import BAND_REST_URL, get_agent
 from orchestrator.run_config import models_map
 
@@ -53,6 +56,7 @@ _DEFAULT_OUT = "results/quartet_local.json"
 # Terminal detection, hardened for small models that mention the tokens mid-thought: the token
 # must start a line, and FINAL_SOLUTION is terminal only when a python block follows it.
 _FINAL = re.compile(r"^[ \t]*FINAL_SOLUTION\b", re.MULTILINE)
+_FINAL_PROJECT = re.compile(r"^[ \t]*FINAL_PROJECT\b", re.MULTILINE)
 _NONE = re.compile(r"^[ \t]*NO_SOLUTION\b", re.MULTILINE)
 _BLOCK = re.compile(r"```(?:python)?\s*\n(.*?)```", re.DOTALL)
 
@@ -66,15 +70,30 @@ def _extract_solution(text: str) -> str:
     return blk.group(1).strip() if blk else ""
 
 
-def classify(text: str) -> tuple[str | None, str]:
-    """Classify a message: ('FINAL_SOLUTION', code) | ('NO_SOLUTION', '') | (None, '').
+def _extract_project(text: str) -> str:
+    """Return the manifest body from a line-anchored FINAL_PROJECT token, but only when it actually
+    carries at least one `=== FILE: ===` block (mirrors the FINAL_SOLUTION must-carry-a-block guard so
+    a bare mention mid-thought is not terminal). The body is parsed downstream by parse_manifest."""
+    m = _FINAL_PROJECT.search(text)
+    if not m:
+        return ""
+    body = text[m.start():]
+    return body if parse_manifest(body)["files"] else ""
 
-    FINAL_SOLUTION wins, but only when it carries a python block. A bare or mid-sentence mention
-    is not terminal, so the caller keeps polling.
+
+def classify(text: str) -> tuple[str | None, str]:
+    """Classify a message: ('FINAL_SOLUTION', code) | ('FINAL_PROJECT', manifest) | ('NO_SOLUTION', '')
+    | (None, '').
+
+    A FINAL_SOLUTION/FINAL_PROJECT is terminal only when it carries its payload (a python block / at
+    least one file block). A bare or mid-sentence mention is not terminal, so the caller keeps polling.
     """
     solution = _extract_solution(text)
     if solution:
         return "FINAL_SOLUTION", solution
+    project = _extract_project(text)
+    if project:
+        return "FINAL_PROJECT", project
     if _NONE.search(text):
         return "NO_SOLUTION", ""
     return None, ""
@@ -234,11 +253,20 @@ def open_room(client: RestClient, problem: dict, agent_ids: dict) -> str:
 
 
 def post_problem(client: RestClient, room_id: str, problem: dict, spec_id: str) -> None:
-    """Post the problem to the room, mentioning @Spec to start the chain."""
-    content = (
-        f"@Spec problem {problem['task_id']}: solve this so it passes the hidden tests.\n\n"
-        f"{problem['prompt']}"
-    )
+    """Post the problem to the room, mentioning @Spec to start the chain. In build mode the @Spec is the
+    Planner and the prompt is the user's plain-language build request."""
+    if problem.get("mode") == "build":
+        ptype = (problem.get("project_type") or "auto").lower()
+        type_line = "" if ptype in ("", "auto") else f"\nProject type: {ptype}."
+        content = (
+            f"@Spec build request: {problem['prompt']}{type_line}\n\n"
+            "Plan the files (a few, self-contained), then hand to @Coder."
+        )
+    else:
+        content = (
+            f"@Spec problem {problem['task_id']}: solve this so it passes the hidden tests.\n\n"
+            f"{problem['prompt']}"
+        )
     _with_retry(
         client.agent_api_messages.create_agent_chat_message,
         room_id,
@@ -307,6 +335,68 @@ def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: st
     return "TIMEOUT", ""
 
 
+_PROJECTS_DIR = Path("results/projects")
+
+
+def _readme_fallback(problem: dict, ptype: str, files: list[dict]) -> str:
+    """A minimal README when the agents did not ship one, so every download has a front page."""
+    listing = "\n".join(f"- `{f['path']}`" for f in files)
+    run = (
+        "python its `test_*.py` files, or import the modules."
+        if ptype == "python"
+        else "open `index.html` in a browser."
+    )
+    return (
+        f"# {problem.get('task_id', 'project')}\n\n"
+        f"Built by Quartet (four small models collaborating through Band) from the request:\n\n"
+        f"> {problem.get('prompt', '').strip()}\n\n"
+        f"Project type: {ptype}\n\n## Files\n{listing}\n\n## Run\nTo use it, {run}\n"
+    )
+
+
+def build_project(run_id: str, problem: dict, manifest_text: str) -> dict:
+    """Write a FINAL_PROJECT manifest to results/projects/<run_id>/, ensure a README, record a
+    _manifest.json, zip it, and confirm it builds. Returns {type, files, passed, dir, zip}."""
+    manifest = parse_manifest(manifest_text)
+    files = manifest["files"]
+    ptype = (manifest["type"] or problem.get("project_type") or "python").lower()
+    if ptype not in ("python", "static"):
+        ptype = "python"
+
+    proj_dir = _PROJECTS_DIR / run_id
+    if proj_dir.exists():
+        shutil.rmtree(proj_dir)
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    for f in files:  # paths already validated safe by parse_manifest
+        dest = proj_dir / f["path"]
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(f["content"], encoding="utf-8")
+
+    if not any(f["path"].lower() == "readme.md" for f in files):
+        readme = _readme_fallback(problem, ptype, files)
+        (proj_dir / "README.md").write_text(readme, encoding="utf-8")
+        files = files + [{"path": "README.md", "content": readme}]
+
+    # Re-run the build once to confirm (the Repairer already passed it in-loop; this is the gate the
+    # conductor scores on, mirroring how the HumanEval path re-runs the held-out test).
+    confirm = run_project(files, ptype)
+    passed = bool(confirm["passed"])
+
+    (proj_dir / "_manifest.json").write_text(json.dumps({
+        "run_id": run_id, "task_id": problem.get("task_id"), "type": ptype,
+        "description": problem.get("prompt", ""), "passed": passed,
+        "files": [f["path"] for f in files],
+    }, indent=2), encoding="utf-8")
+
+    zip_path = _PROJECTS_DIR / f"{run_id}.zip"
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files:
+            z.writestr(f["path"], f["content"])
+    logging.info("[%s] project -> %s (%d files, passed=%s)", problem.get("task_id"), proj_dir, len(files), passed)
+    return {"type": ptype, "files": [f["path"] for f in files], "passed": passed,
+            "dir": str(proj_dir), "zip": str(zip_path)}
+
+
 def drive_room(client: RestClient, problem: dict, room_id: str, agent_ids: dict, conductor_id: str, timeout: float, poll: float, trace: bool = False, should_stop=None) -> dict:
     """Post the problem into an already-open room, harvest the terminal, score, write the transcript.
 
@@ -329,7 +419,17 @@ def drive_room(client: RestClient, problem: dict, room_id: str, agent_ids: dict,
         "error": None,
         "solution": solution,
     }
-    if status == "FINAL_SOLUTION":
+    if status == "FINAL_PROJECT":
+        # Build mode: write the multi-file project, zip it, confirm it builds, and score on that.
+        try:
+            project = build_project(os.environ.get("QUARTET_RUN_ID", task_id), problem, solution)
+            record["passed"] = project["passed"]
+            record["project"] = project
+            if not project["passed"]:
+                record["error"] = "project did not build/pass on the confirming run"
+        except Exception as e:  # noqa: BLE001 - a build/zip failure must not sink the run
+            record["error"] = f"project build failed: {str(e)[:200]}"
+    elif status == "FINAL_SOLUTION":
         result = run_tests(solution, problem["test"], problem["entry_point"])
         record["passed"] = result["passed"]
         record["timed_out"] = result["timed_out"]

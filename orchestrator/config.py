@@ -6,7 +6,6 @@ OpenAI-compatible server (default, free debugging) or AI/ML API based on LLM_PRO
 
 from __future__ import annotations
 
-import json
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -15,17 +14,16 @@ import yaml
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 
+from orchestrator import keystore
+
 load_dotenv()
 
 _CONFIG_PATH = Path(__file__).parent.parent / "agent_config.yaml"
 
-# Server-side key store for the cloud providers, written by the dashboard ("Build your stack"). Keyed
-# by provider, gitignored, never returned to the client. Shape:
-#   {"groq": {"api_key": "..."},
-#    "aimlapi": {"api_key": "..."},
-#    "openai_compatible": {"base_url": "...", "api_key": "..."}}
-# This holds inference keys only; the band_ chat-room keys stay in agent_config.yaml.
-_PROVIDER_KEYS_PATH = Path(__file__).parent / "provider_keys.json"
+# Cloud-provider inference keys (groq / aimlapi / openai_compatible) entered from the dashboard live in
+# the in-memory keystore (orchestrator/keystore.py): never on disk, never logged, never returned. In a
+# spawned agent process the keystore is empty, but the runner injects the same secrets as env vars
+# (GROQ_API_KEY / AIML_API_KEY / OPENAI_COMPAT_*), which provider_secret() reads first.
 
 # Local OpenAI-compatible endpoints. Two servers in the default topology: the four agents run a small
 # coder model on :8081, the large competitor runs Qwen3.6 on :8080. make_llm uses LOCAL_BASE_URL, which
@@ -74,20 +72,17 @@ def _load_config() -> dict:
 
 
 def _read_provider_keys() -> dict:
-    """The server-side provider key store, read fresh so a key entered in the dashboard while the
-    demo server is running is picked up on the next run. Returns {} when absent/unreadable."""
-    try:
-        return json.loads(_PROVIDER_KEYS_PATH.read_text()) or {}
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    """The in-memory provider key store (orchestrator/keystore.py). In the demo-server process this
+    holds keys entered from the dashboard; in a spawned agent process it is empty (the runner injects
+    those secrets via env instead, which provider_secret reads first). Never touches disk."""
+    return keystore.all_keys()
 
 
 def aimlapi_key() -> str | None:
-    """The aimlapi inference key. Looked up in order: AIML_API_KEY env / .env, then the dashboard key
-    store (provider_keys.json), then agent_config.yaml so all credentials can live in one file if
-    preferred. Accepts a top-level `aiml_api_key:` or a nested `providers: {aimlapi: {api_key: ...}}`.
-    This is the LLM key, distinct from the per-agent `band_*` keys (which authenticate the Band chat
-    room, not model inference)."""
+    """The aimlapi inference key. Looked up in order: AIML_API_KEY env / .env, then the in-memory key
+    store, then agent_config.yaml so a key can also live in one file if preferred. Accepts a top-level
+    `aiml_api_key:` or a nested `providers: {aimlapi: {api_key: ...}}`. This is the LLM key, distinct
+    from the per-agent `band_*` keys (which authenticate the Band chat room, not model inference)."""
     env = os.environ.get("AIML_API_KEY")
     if env:
         return env
@@ -108,18 +103,9 @@ def aimlapi_key() -> str | None:
 
 
 def save_provider_key(provider: str, api_key: str | None = None, base_url: str | None = None) -> dict:
-    """Write a provider's secret to the gitignored key store, merging with what is there. Used by the
-    dashboard. Returns key_status() (booleans only, never the key)."""
-    if provider not in ("groq", "aimlapi", "openai_compatible"):
-        raise ValueError(f"provider {provider!r} does not take a key")
-    store = _read_provider_keys()
-    entry = dict(store.get(provider) or {})
-    if api_key is not None and api_key.strip():
-        entry["api_key"] = api_key.strip()
-    if base_url is not None and base_url.strip():
-        entry["base_url"] = base_url.strip()
-    store[provider] = entry
-    _PROVIDER_KEYS_PATH.write_text(json.dumps(store, indent=2))
+    """Store a provider's secret in the in-memory keystore (no disk). Used by the dashboard. Returns
+    key_status() (booleans only, never the key)."""
+    keystore.set_key(provider, api_key, base_url)
     return key_status()
 
 

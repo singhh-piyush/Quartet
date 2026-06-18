@@ -36,7 +36,7 @@ from pathlib import Path
 import httpx
 
 from bench.events import read_events
-from orchestrator import run_config
+from orchestrator import keystore, run_config
 from orchestrator.config import (
     AIMLAPI_BASE_URL,
     GROQ_BASE_URL,
@@ -49,6 +49,24 @@ from orchestrator.config import (
 
 # Providers that need a key/base resolved server-side before a run can produce inference.
 _KEYED_PROVIDERS = ("groq", "aimlapi", "openai_compatible")
+
+
+def _provider_key_env() -> dict:
+    """Provider secrets from the in-memory keystore as child-process env vars. Spawned agents have no
+    keystore of their own (a fresh process), so the keys reach them only through this env. Never logged.
+    Maps to the names config.provider_secret reads first: GROQ_API_KEY / AIML_API_KEY / OPENAI_COMPAT_*."""
+    keys = keystore.all_keys()
+    env: dict[str, str] = {}
+    if (keys.get("groq") or {}).get("api_key"):
+        env["GROQ_API_KEY"] = keys["groq"]["api_key"]
+    if (keys.get("aimlapi") or {}).get("api_key"):
+        env["AIML_API_KEY"] = keys["aimlapi"]["api_key"]
+    oc = keys.get("openai_compatible") or {}
+    if oc.get("base_url"):
+        env["OPENAI_COMPAT_BASE_URL"] = oc["base_url"]
+    if oc.get("api_key"):
+        env["OPENAI_COMPAT_API_KEY"] = oc["api_key"]
+    return env
 
 ROOT = Path(__file__).resolve().parent.parent
 EVENTS_DIR = ROOT / "results" / "events"
@@ -87,16 +105,27 @@ class RunManager:
             return {**self.state, "agents": agents, "active": self.state.get("status") in ("starting", "running")}
 
     def start(self, task_id: str) -> dict:
-        """Begin a live run for task_id. Stops any in-flight run first. Returns the new run state."""
+        """Begin a live HumanEval race run for task_id. Stops any in-flight run first."""
+        return self._start(task_id, build=None)
+
+    def start_build(self, description: str, project_type: str = "auto") -> dict:
+        """Begin a live BUILD run: the quartet builds a small project from a plain-language request.
+        No large-model race; the Coder defaults to Groq gpt-oss-120b (run_config.apply_build_defaults)."""
+        return self._start("build", build={"description": description, "project_type": project_type or "auto"})
+
+    def _start(self, task_id: str, build: dict | None) -> dict:
+        """Shared launcher for race and build runs."""
         self.stop()
         run_id = _mint_run_id()
-        # Fail fast on an unrunnable config (e.g. agents set to aimlapi with no key) instead of
+        # The config the run will actually use (build overlays the Groq coder default).
+        cfg = run_config.apply_build_defaults(run_config.load()) if build else run_config.load()
+        # Fail fast on an unrunnable config (e.g. agents on a keyed provider with no key) instead of
         # spawning four processes that die on the first model call and look like a silent stall.
-        fatal = _fatal_config_error()
+        fatal = _fatal_config_error(cfg)
         if fatal:
             with self._lock:
                 self.state = {
-                    "status": "error", "run_id": run_id, "task_id": task_id,
+                    "status": "error", "run_id": run_id, "task_id": task_id, "mode": "build" if build else "race",
                     "started_at": datetime.now(timezone.utc).isoformat(),
                     "ended_at": datetime.now(timezone.utc).isoformat(),
                     "result": None, "warnings": [], "error": fatal,
@@ -107,13 +136,14 @@ class RunManager:
                 "status": "starting",
                 "run_id": run_id,
                 "task_id": task_id,
+                "mode": "build" if build else "race",
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "ended_at": None,
                 "result": None,
-                "warnings": _preflight(),
+                "warnings": _preflight(cfg),
                 "error": None,
             }
-            self._thread = threading.Thread(target=self._run, args=(run_id, task_id), daemon=True)
+            self._thread = threading.Thread(target=self._run, args=(run_id, task_id, build), daemon=True)
             self._thread.start()
         return self.status()
 
@@ -129,22 +159,39 @@ class RunManager:
 
     # ---- worker ----
 
-    def _run(self, run_id: str, task_id: str) -> None:
+    def _run(self, run_id: str, task_id: str, build: dict | None = None) -> None:
         events_path = EVENTS_DIR / f"{run_id}.jsonl"
         EVENTS_DIR.mkdir(parents=True, exist_ok=True)
         LOGS_DIR.mkdir(parents=True, exist_ok=True)
-        cfg = run_config.load()
+        cfg = run_config.apply_build_defaults(run_config.load()) if build else run_config.load()
         child_base = {
             **os.environ,
             "QUARTET_RUN_ID": run_id,
             "QUARTET_EVENTS_PATH": str(events_path),
+            # Inject the in-memory provider keys so each spawned agent / baseline resolves its cloud
+            # model. The keys are never written to disk; they exist only in this process and the
+            # children's env. config.provider_secret reads these env names first.
+            **_provider_key_env(),
         }
+        if build:
+            child_base["QUARTET_MODE"] = "build"
         try:
             # Lazy import so a syntax error here cannot break the read-only server import path.
             from orchestrator import conductor
-            from bench.dataset import get_problem
 
-            problem = get_problem(task_id)
+            if build:
+                # Build mode: a synthetic problem carrying the plain-language request (no dataset).
+                problem = {
+                    "task_id": f"build-{run_id}",
+                    "prompt": build["description"],
+                    "mode": "build",
+                    "project_type": build.get("project_type", "auto"),
+                    "entry_point": None,
+                    "test": None,
+                }
+            else:
+                from bench.dataset import get_problem
+                problem = get_problem(task_id)
             client = conductor.make_client()
             agent_ids = {role: get_agent(role)["agent_id"] for role in ROLES}
             conductor_id = get_agent("conductor")["agent_id"]
@@ -176,12 +223,14 @@ class RunManager:
                 return
 
             # 4. race lane: the lone large model one-shots the same task, scored on the hidden test.
-            large = cfg["large"]
-            self._spawn(
-                ["-m", "bench.baselines", "--live", "--task", task_id, "--model", large["model"], "--role", "single_large"],
-                {**child_base, "LLM_PROVIDER": large["provider"], "LOCAL_BASE_URL": LOCAL_LARGE_URL},
-                run_id, "single_large",
-            )
+            # Build mode is a build, not a competition, so there is no large-model race.
+            if not build:
+                large = cfg["large"]
+                self._spawn(
+                    ["-m", "bench.baselines", "--live", "--task", task_id, "--model", large["model"], "--role", "single_large"],
+                    {**child_base, "LLM_PROVIDER": large["provider"], "LOCAL_BASE_URL": LOCAL_LARGE_URL},
+                    run_id, "single_large",
+                )
 
             # 5. drive the room to a terminal and score it (abortable via stop()).
             record = conductor.drive_room(
@@ -307,13 +356,13 @@ def _provider_unrunnable(provider: str) -> bool:
     return not secret.get("api_key")
 
 
-def _fatal_config_error() -> str | None:
+def _fatal_config_error(cfg: dict | None = None) -> str | None:
     """Return a clear message when the run cannot possibly produce agent inference, so start() can
     refuse instead of spawning agents that die immediately. Fatal cases: a keyed provider (groq,
     aimlapi, openai_compatible) selected with no key/base, or an aimlapi key that is actually a band_
     chat-room key (which aimlapi rejects). A local server being down is a warning (it may come up
     during the connect window), handled by _preflight."""
-    cfg = run_config.load()
+    cfg = cfg or run_config.load()
     used = {a["provider"] for a in cfg["agents"].values()} | {cfg["large"]["provider"]}
     for provider in _KEYED_PROVIDERS:
         if provider in used and _provider_unrunnable(provider):
@@ -329,12 +378,12 @@ def _fatal_config_error() -> str | None:
     return None
 
 
-def _preflight() -> list[str]:
+def _preflight(cfg: dict | None = None) -> list[str]:
     """Best-effort check that the selected inference endpoints are reachable. Warnings only; the run
     still starts so a judge sees the agents connect and any failure surfaces in the stream. Two local
     servers in the default topology: the agents on :8081, the large competitor on :8080."""
     warnings: list[str] = []
-    cfg = run_config.load()
+    cfg = cfg or run_config.load()
     agent_providers = {a["provider"] for a in cfg["agents"].values()}
     if "local" in agent_providers and not _local_up(LOCAL_AGENTS_URL):
         warnings.append(f"agents model server not reachable at {LOCAL_AGENTS_URL} (start it for live runs)")

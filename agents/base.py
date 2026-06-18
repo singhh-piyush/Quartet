@@ -90,12 +90,27 @@ def _ai_text(out) -> str:
 # these into the reasoning transcript. Append mode keeps the four agent processes from clobbering.
 _TRANSCRIPTS = Path(__file__).resolve().parent.parent / "results" / "transcripts"
 _FINAL_RE = re.compile(r"^[ \t]*FINAL_SOLUTION\b", re.MULTILINE)
+_FINAL_PROJECT_RE = re.compile(r"^[ \t]*FINAL_PROJECT\b", re.MULTILINE)
 _NONE_RE = re.compile(r"^[ \t]*NO_SOLUTION\b", re.MULTILINE)
+
+# QUARTET_MODE=build selects the build workspace: build prompts (prompts/build/<role>.md) and the
+# Repairer's run_project tool (agents/repairer.py). Unset keeps the HumanEval behavior unchanged.
+_MODE = os.environ.get("QUARTET_MODE", "")
+
+
+def _prompt_path(name: str) -> Path:
+    if _MODE == "build":
+        p = _PROMPTS / "build" / f"{name}.md"
+        if p.exists():
+            return p
+    return _PROMPTS / f"{name}.md"
 
 
 def _kind(content: str) -> str | None:
     if _FINAL_RE.search(content):
         return "FINAL_SOLUTION"
+    if _FINAL_PROJECT_RE.search(content):
+        return "FINAL_PROJECT"
     if _NONE_RE.search(content):
         return "NO_SOLUTION"
     return None
@@ -291,7 +306,7 @@ async def _serve(name: str, tools=None) -> None:
         # the non-streaming baseline would have usage) and the cost comparison breaks.
         llm=make_llm(name, temperature=_AGENT_TEMPERATURE, max_tokens=_AGENT_MAX_TOKENS, callbacks=[_TokenCallback(name)], stream_usage=True, **no_think),
         checkpointer=InMemorySaver(),
-        custom_section=(_PROMPTS / f"{name}.md").read_text(),
+        custom_section=_prompt_path(name).read_text(),
         additional_tools=list(tools) if tools else None,
     )
     agent = Agent.create(

@@ -167,6 +167,30 @@ export interface AgentProc {
   alive: boolean;
 }
 
+// ---- build workspace ----
+
+export interface ProjectFile {
+  path: string;
+  size: number;
+}
+
+export interface ProjectInfo {
+  run_id: string;
+  type?: string | null; // python | static
+  passed?: boolean | null;
+  description?: string;
+  files: ProjectFile[];
+  readme: string;
+  has_static_entry: boolean;
+  zip: string;
+  missing?: boolean;
+}
+
+export interface ProjectFileContent {
+  path: string;
+  content: string;
+}
+
 export interface RunStatus {
   status: string; // idle | starting | running | done | error | stopped
   run_id: string | null;

@@ -25,9 +25,15 @@ Endpoints:
   POST /api/stacks/duplicate {name, new_name}      copy a stack under a new name
   GET  /api/agents                                 live run + agent process status
   POST /api/run     {task_id}                      start a real live Quartet run + large race
+  POST /api/build   {description, project_type, stack?}  start a live BUILD run (multi-file project)
+  GET  /api/project?run_id=                        the built project: type, file tree, README
+  GET  /api/project/file?run_id=&path=             one project file's content
+  GET  /api/project/zip?run_id=                    download the project as a .zip
+  GET  /api/project/preview/<run_id>/<path>        serve a static project file for the iframe preview
   POST /api/stop                                   stop the active run
 Anything else is served from the built frontend at web/dist/ (SPA fallback to index.html).
-The control-plane endpoints bind to 127.0.0.1 only and never return API keys.
+Process-spawning + key POSTs require localhost or the X-Quartet-Token shared token (tunnel access);
+keys live in memory only and are never returned. CORS echoes QUARTET_ALLOWED_ORIGINS + localhost.
 
 Cost note: cost_usd is derived here from a small static price map times the token counts in the
 results files. Local-provider runs frequently report total_tokens=0 (the OpenAI-compatible server
@@ -41,12 +47,13 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import os
 import re
 import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from bench.events import read_events
 from orchestrator import run_config, stacks
@@ -57,8 +64,13 @@ ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
 EVENTS_DIR = RESULTS / "events"
 TRANSCRIPTS_DIR = RESULTS / "transcripts"
+PROJECTS_DIR = RESULTS / "projects"
 WEB_DIST = ROOT / "web" / "dist"
 SAMPLE_RESULTS = RESULTS / "demo-results.sample.json"
+
+# CORS allowlist for the deployed frontend (e.g. the Vercel origin). Comma-separated; localhost dev
+# origins are always allowed. The control plane is additionally guarded by the token check below.
+_ALLOWED_ORIGINS = {o.strip() for o in os.environ.get("QUARTET_ALLOWED_ORIGINS", "").split(",") if o.strip()}
 
 # Single live run at a time, shared across handler threads.
 RUNS = RunManager()
@@ -83,6 +95,23 @@ def _read_json(path: Path):
         return json.loads(path.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return None
+
+
+def _origin_is_local(origin: str) -> bool:
+    """True for a localhost dev origin (http://localhost:5173, http://127.0.0.1:8000, etc.)."""
+    return bool(re.match(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$", origin or ""))
+
+
+def _safe_join(base: Path, rel: str) -> Path | None:
+    """Resolve base/rel and return it only if it stays inside base (no traversal, no absolute)."""
+    rel = (rel or "").lstrip("/")
+    if not rel:
+        return None
+    target = (base / rel).resolve()
+    base = base.resolve()
+    if base != target and base not in target.parents:
+        return None
+    return target
 
 
 def _read_messages_jsonl(path: Path) -> list[dict]:
@@ -183,7 +212,14 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        # Echo an allowed origin (the deployed frontend / localhost dev) so the browser accepts the
+        # response; fall back to * for same-origin / tool use. No cookies are used, so no credentials.
+        origin = self.headers.get("Origin")
+        if origin and (origin in _ALLOWED_ORIGINS or _origin_is_local(origin)):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+        else:
+            self.send_header("Access-Control-Allow-Origin", "*")
 
     def _send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
@@ -198,7 +234,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self._cors()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Quartet-Token")
         self.end_headers()
 
     def _read_body(self) -> dict:
@@ -210,12 +246,19 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError):
             return {}
 
-    def _local_host(self) -> bool:
-        """The control plane can spawn processes, so only accept it from a localhost Host header.
-        This blocks DNS-rebinding: a remote page that resolves a name to 127.0.0.1 still sends its
-        own Host, which is rejected. The server already binds 127.0.0.1, so this is defence in depth."""
+    def _is_localhost(self) -> bool:
         host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
         return host in ("127.0.0.1", "localhost", "[::1]", "::1", "")
+
+    def _authorized(self) -> bool:
+        """Gate the process-spawning + key control plane. Localhost requests pass (local dev). Over the
+        public tunnel the Host is the tunnel hostname, so we require the shared token instead: a random
+        page (or a DNS-rebinding attempt) cannot know QUARTET_API_TOKEN, and an unset token refuses all
+        non-localhost control calls outright. The server still binds 127.0.0.1; the tunnel forwards to it."""
+        if self._is_localhost():
+            return True
+        token = os.environ.get("QUARTET_API_TOKEN")
+        return bool(token) and self.headers.get("X-Quartet-Token") == token
 
     # ---- control plane: keys + stacks (POST handlers; key values never returned) ----
 
@@ -256,6 +299,102 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._send_json({"saved": copy, "stacks": stacks.list_stacks()})
 
+    # ---- control plane: build runs ----
+
+    def _handle_build(self, body: dict) -> None:
+        description = (body.get("description") or "").strip()
+        if not description:
+            self._send_json({"error": "description required"}, status=400)
+            return
+        project_type = (body.get("project_type") or "auto").lower()
+        if project_type not in ("auto", "python", "static"):
+            project_type = "auto"
+        # Optional: apply a chosen stack as the active config before the build run.
+        if isinstance(body.get("stack"), dict):
+            run_config.save(body["stack"])
+        self._send_json(RUNS.start_build(description, project_type))
+
+    # ---- /api/project* (the built project: tree, file, zip, static preview) ----
+
+    def _send_project(self, qs: dict) -> None:
+        run_id = (qs.get("run_id") or [""])[0]
+        if not _RUN_ID_OK.match(run_id):
+            self._send_json({"error": "bad run_id"}, status=400)
+            return
+        d = PROJECTS_DIR / run_id
+        if not d.is_dir():
+            self._send_json({"run_id": run_id, "missing": True, "files": []})
+            return
+        manifest = _read_json(d / "_manifest.json") or {}
+        files = []
+        for p in sorted(d.rglob("*")):
+            if p.is_file() and p.name != "_manifest.json":
+                files.append({"path": str(p.relative_to(d)), "size": p.stat().st_size})
+        names = [f["path"] for f in files]
+        readme_path = d / "README.md"
+        self._send_json({
+            "run_id": run_id,
+            "type": manifest.get("type"),
+            "passed": manifest.get("passed"),
+            "description": manifest.get("description"),
+            "files": files,
+            "readme": readme_path.read_text(encoding="utf-8", errors="replace") if readme_path.is_file() else "",
+            "has_static_entry": any(n == "index.html" or n.endswith("/index.html") for n in names),
+            "zip": f"/api/project/zip?run_id={run_id}",
+        })
+
+    def _send_project_file(self, qs: dict) -> None:
+        run_id = (qs.get("run_id") or [""])[0]
+        rel = (qs.get("path") or [""])[0]
+        if not _RUN_ID_OK.match(run_id):
+            self._send_json({"error": "bad run_id"}, status=400)
+            return
+        target = _safe_join(PROJECTS_DIR / run_id, rel)
+        if target is None or not target.is_file():
+            self._send_json({"error": "not found"}, status=404)
+            return
+        self._send_json({"path": rel, "content": target.read_text(encoding="utf-8", errors="replace")})
+
+    def _send_project_zip(self, qs: dict) -> None:
+        run_id = (qs.get("run_id") or [""])[0]
+        if not _RUN_ID_OK.match(run_id):
+            self._send_json({"error": "bad run_id"}, status=400)
+            return
+        zp = PROJECTS_DIR / f"{run_id}.zip"
+        if not zp.is_file():
+            self._send_json({"error": "not found"}, status=404)
+            return
+        body = zp.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/zip")
+        self.send_header("Content-Disposition", f'attachment; filename="quartet-{run_id}.zip"')
+        self.send_header("Content-Length", str(len(body)))
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _serve_project_preview(self, path: str) -> None:
+        """Serve a static file from a built project for the iframe preview. Scoped to the project dir
+        and traversal-guarded. The client sandboxes the iframe; generated code never runs on the server."""
+        rest = unquote(path[len("/api/project/preview/"):])
+        run_id, _, rel = rest.partition("/")
+        if not _RUN_ID_OK.match(run_id):
+            self._send_json({"error": "bad run_id"}, status=400)
+            return
+        target = _safe_join(PROJECTS_DIR / run_id, rel or "index.html")
+        if target is None or not target.is_file():
+            self._send_json({"error": "not found"}, status=404)
+            return
+        body = target.read_bytes()
+        ctype = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self._cors()
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -277,6 +416,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(list_provider_models(provider))
             elif path == "/api/stacks":
                 self._send_json({"stacks": stacks.list_stacks()})
+            elif path == "/api/project":
+                self._send_project(parse_qs(parsed.query))
+            elif path == "/api/project/file":
+                self._send_project_file(parse_qs(parsed.query))
+            elif path == "/api/project/zip":
+                self._send_project_zip(parse_qs(parsed.query))
+            elif path.startswith("/api/project/preview/"):
+                self._serve_project_preview(path)
             elif path == "/api/agents":
                 self._send_json(RUNS.status())
             elif path == "/api/stream":
@@ -289,7 +436,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path = parsed.path
-        if not self._local_host():
+        if not self._authorized():
             self._send_json({"error": "forbidden"}, status=403)
             return
         try:
@@ -299,6 +446,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json({"error": "task_id required"}, status=400)
                     return
                 self._send_json(RUNS.start(task_id))
+            elif path == "/api/build":
+                self._handle_build(self._read_body() or {})
             elif path == "/api/stop":
                 RUNS.stop()
                 self._send_json(RUNS.status())

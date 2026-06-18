@@ -172,7 +172,7 @@ export function reduceRoom(prev: RoomState, ev: QuartetEvent): RoomState {
       break;
 
     case "tool_call":
-      if (ev.tool === "run_tests" && ev.result) {
+      if ((ev.tool === "run_tests" || ev.tool === "run_project") && ev.result) {
         const cases = ev.result.cases ?? [];
         state.code = {
           ...state.code,

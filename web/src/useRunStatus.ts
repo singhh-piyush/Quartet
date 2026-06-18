@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchAgents, startRun as apiStartRun, stopRun as apiStopRun } from "./api";
-import type { RunStatus } from "./types";
+import { fetchAgents, startBuild as apiStartBuild, startRun as apiStartRun, stopRun as apiStopRun } from "./api";
+import type { ModelConfig, RunStatus } from "./types";
 
 const IDLE: RunStatus = { status: "idle", run_id: null, task_id: null, active: false, agents: [] };
 
@@ -9,6 +9,7 @@ const IDLE: RunStatus = { status: "idle", run_id: null, task_id: null, active: f
 export function useRunStatus(): {
   status: RunStatus;
   start: (taskId: string) => Promise<RunStatus>;
+  startBuild: (description: string, projectType: string, stack?: Partial<ModelConfig>) => Promise<RunStatus>;
   stop: () => Promise<void>;
   refresh: () => void;
 } {
@@ -43,10 +44,19 @@ export function useRunStatus(): {
     return s;
   }, []);
 
+  const startBuild = useCallback(
+    async (description: string, projectType: string, stack?: Partial<ModelConfig>) => {
+      const s = await apiStartBuild(description, projectType, stack);
+      setStatus(s);
+      return s;
+    },
+    [],
+  );
+
   const stop = useCallback(async () => {
     const s = await apiStopRun();
     setStatus(s);
   }, []);
 
-  return { status, start, stop, refresh };
+  return { status, start, startBuild, stop, refresh };
 }
