@@ -11,6 +11,9 @@ export const roleMeta: Record<Role, { label: string; color: string; sub: string 
 // Left-to-right signal path through the room.
 export const signalOrder: Role[] = ["spec", "coder", "tester", "repairer"];
 
+// Phases where an agent is actively working (drives the pulsing dot and the "thinking" circle).
+export const ACTIVE_PHASES: Set<Phase> = new Set(["receiving", "thinking", "testing"]);
+
 export const phaseLabel: Record<Phase, string> = {
   idle: "OFFLINE",
   connected: "READY",

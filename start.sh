@@ -3,7 +3,7 @@
 #
 # With the new launcher you do NOT start the four agents by hand: the demo server spawns them (and
 # the large-model race) when you click "Run live". So "everything" is just:
-#   1. your local model server on :8080 (inference for live runs)   - optional, see MODEL_SERVER_CMD
+#   1. two local model servers: large = Qwen3.6 on :8080, agents = small coder on :8081 (live runs)
 #   2. the demo server (backend + run launcher + static frontend)
 #   3. the frontend (Vite dev server, or a one-off build served by the demo server)
 #
@@ -18,11 +18,12 @@ cd "$ROOT"
 
 MODE="${1:-dev}"
 
-# Command that starts the local model server on :8080. Both the four Band agents and the single large
-# competitor use this one server (we are local-only: no aimlapi). Override by exporting MODEL_SERVER_CMD
-# before running, or set it to "" to start the server yourself in another window. The default below is
-# the project's local Qwen3.6 build, launched from ~/ai_models. It must serve on :8080 with --jinja so
-# the agents can tool-call (band_send_message).
+# Two local model servers (the default topology):
+#   :8080  LARGE competitor only  - the project's Qwen3.6-35B build (CPU-MoE, big context).
+#   :8081  the four Band agents   - a small coder model (genuinely "small" vs the 35B, and on its own
+#                                   generation slot so the race against the large model is truly parallel).
+# Each server: override by exporting MODEL_SERVER_CMD / AGENTS_MODEL_CMD before running, or set to "" to
+# start that server yourself. Both must serve with --jinja so the agents can tool-call (band_send_message).
 DEFAULT_MODEL_CMD='cd ~/ai_models && exec llama-server \
   -m Qwen3.6-35B-A3B-Claude-4.7-Opus-Reasoning-Distilled.IQ4_XS.gguf \
   -ngl 999 \
@@ -40,6 +41,23 @@ DEFAULT_MODEL_CMD='cd ~/ai_models && exec llama-server \
   --reasoning-format deepseek \
   --port 8080'
 MODEL_SERVER_CMD="${MODEL_SERVER_CMD-$DEFAULT_MODEL_CMD}"
+
+# Agents server on :8081: a small Qwen2.5-Coder-7B (proven tool-caller, non-reasoning, fast). Modest
+# context (agents do not need 262k). Runs on CPU (-ngl 0): on this box the 35B large model + its 262k
+# KV cache already fills the 8GB GPU, leaving no room for the 7B, so the agents use the (ample) system
+# RAM + CPU threads instead. A 7B on CPU is still much faster than the 35B was, and it is a SEPARATE
+# server/slot so the race stays concurrent. If you free GPU VRAM (e.g. drop the large model's
+# --ctx-size), set -ngl 999 here to put the agents on the GPU. Swap -m to use another ~/ai_models GGUF.
+DEFAULT_AGENTS_MODEL_CMD='cd ~/ai_models && exec llama-server \
+  -m WhiteRabbitNeo-WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B-latest.gguf \
+  -ngl 0 \
+  --ctx-size 8192 \
+  -t 8 -tb 8 \
+  -np 1 \
+  -b 1024 -ub 256 \
+  --jinja \
+  --port 8081'
+AGENTS_MODEL_CMD="${AGENTS_MODEL_CMD-$DEFAULT_AGENTS_MODEL_CMD}"
 
 RUNDIR="$(mktemp -d "${TMPDIR:-/tmp}/quartet-run.XXXXXX")"
 
@@ -90,9 +108,16 @@ VITE_BODY='[ -d web/node_modules ] || (cd web && npm install); cd web && exec np
 declare -a NAMES=() BODIES=()
 if [ -n "$MODEL_SERVER_CMD" ]; then
   if curl -s -o /dev/null --max-time 2 "http://localhost:8080/v1/models" 2>/dev/null; then
-    echo "[start] model server already serving on :8080 (reusing it)."
+    echo "[start] large model server already serving on :8080 (reusing it)."
   else
-    NAMES+=("model-server"); BODIES+=("$MODEL_SERVER_CMD")
+    NAMES+=("model-server-large"); BODIES+=("$MODEL_SERVER_CMD")
+  fi
+fi
+if [ -n "$AGENTS_MODEL_CMD" ]; then
+  if curl -s -o /dev/null --max-time 2 "http://localhost:8081/v1/models" 2>/dev/null; then
+    echo "[start] agents model server already serving on :8081 (reusing it)."
+  else
+    NAMES+=("model-server-agents"); BODIES+=("$AGENTS_MODEL_CMD")
   fi
 fi
 if curl -s -o /dev/null --max-time 2 "http://localhost:8000/api/models" 2>/dev/null; then
@@ -154,13 +179,14 @@ else
   launch_background
 fi
 
-if [ -z "$MODEL_SERVER_CMD" ]; then
-  echo "[start] note: MODEL_SERVER_CMD is empty. Live runs need the local model server on :8080 (both the"
-  echo "        agents and the large competitor use it). Start it yourself, or unset MODEL_SERVER_CMD to"
-  echo "        use the built-in default (~/ai_models llama-server)."
+if [ -z "$MODEL_SERVER_CMD" ] || [ -z "$AGENTS_MODEL_CMD" ]; then
+  echo "[start] note: live runs need TWO local servers - the large competitor on :8080 and the four"
+  echo "        agents (small coder model) on :8081. Start any you set to empty yourself, or unset the"
+  echo "        var to use the built-in default (~/ai_models llama-server)."
 else
-  echo "[start] note: agents + large model are local-only (provider=local, server on :8080). The model"
-  echo "        can take a while to load; live runs warn until :8080 answers."
+  echo "[start] note: local-only, two servers - large = Qwen3.6 on :8080, agents = small coder on :8081"
+  echo "        (separate slots, so the race is truly parallel). Models can take a while to load; live"
+  echo "        runs warn until both answer."
 fi
 
 echo "[start] waiting for the demo server..."

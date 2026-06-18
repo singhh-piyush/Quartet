@@ -286,7 +286,10 @@ async def _serve(name: str, tools=None) -> None:
     no_think = _NO_THINK_BODY if os.environ.get("LLM_PROVIDER", "local") == "local" else {}
     adapter = _TelemetryAdapter(
         role=name,
-        llm=make_llm(name, temperature=_AGENT_TEMPERATURE, max_tokens=_AGENT_MAX_TOKENS, callbacks=[_TokenCallback(name)], **no_think),
+        # stream_usage=True asks the server for a final usage chunk (stream_options.include_usage) so
+        # the streamed agent response carries token counts; without it the agents report 0 tokens (only
+        # the non-streaming baseline would have usage) and the cost comparison breaks.
+        llm=make_llm(name, temperature=_AGENT_TEMPERATURE, max_tokens=_AGENT_MAX_TOKENS, callbacks=[_TokenCallback(name)], stream_usage=True, **no_think),
         checkpointer=InMemorySaver(),
         custom_section=(_PROMPTS / f"{name}.md").read_text(),
         additional_tools=list(tools) if tools else None,

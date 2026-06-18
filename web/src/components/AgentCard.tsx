@@ -1,8 +1,7 @@
+import { forwardRef } from "react";
 import type { CSSProperties } from "react";
 import type { AgentState, Role } from "../types";
-import { fmtInt, phaseLabel, roleMeta } from "../theme";
-
-const ACTIVE_PHASES = new Set(["receiving", "thinking", "testing"]);
+import { ACTIVE_PHASES, fmtInt, phaseLabel, roleMeta } from "../theme";
 
 export function shortModel(model: string): string {
   if (!model || model === "local-model") return model || "";
@@ -14,28 +13,19 @@ export interface AgentNodeProps {
   role: Role;
   state: AgentState;
   active: boolean;
-  // integrated border-flow: the ring sweeps once when this node participates in a handoff.
-  sweep: boolean;
-  sweepKey: number;
-  flowColor: string;
-  flowDelay: number;
+  thinking?: boolean;
   onSelect?: () => void;
   selected?: boolean;
 }
 
-// A compact station on the signal path. The handoff animation is integrated into the node's own
-// border via the `.flow-ring` child (no measurement, always pixel-perfect to the shape).
-export function AgentCard({
-  role,
-  state,
-  active,
-  sweep,
-  sweepKey,
-  flowColor,
-  flowDelay,
-  onSelect,
-  selected = false,
-}: AgentNodeProps) {
+// A compact station on the signal path. The handoff light is NOT drawn here; a single travelling glow
+// (SignalFlow) runs along these cards' real borders. `active` is gated on the comet ARRIVING (litRole),
+// not on the raw activeRole, so a card only lights once the transfer reaches it. `thinking` intensifies
+// the steady glow while the agent works (the slow circling ring is also drawn by SignalFlow).
+export const AgentCard = forwardRef<HTMLDivElement, AgentNodeProps>(function AgentCard(
+  { role, state, active, thinking = false, onSelect, selected = false },
+  ref,
+) {
   const meta = roleMeta[role];
   const live = state.connected;
   const pulsing = active && ACTIVE_PHASES.has(state.phase);
@@ -43,6 +33,7 @@ export function AgentCard({
 
   return (
     <div
+      ref={ref}
       onClick={onSelect}
       className={`relative flex min-h-[96px] flex-col rounded-lg border bg-[var(--panel)] px-3.5 py-3 transition-all duration-500 ease-spring ${
         onSelect ? "cursor-pointer" : ""
@@ -50,20 +41,13 @@ export function AgentCard({
       style={{
         borderColor: ring,
         boxShadow: active
-          ? `0 0 0 1px ${meta.color}, 0 0 26px -6px ${meta.color}66, var(--elevate)`
+          ? `0 0 0 1px ${meta.color}, 0 0 ${thinking ? 34 : 24}px -6px ${meta.color}${thinking ? "99" : "66"}, var(--elevate)`
           : selected
             ? `0 0 0 1px ${meta.color}44, var(--elevate)`
             : "var(--elevate)",
         opacity: live ? 1 : 0.45,
       }}
     >
-      {/* integrated border light: remounts on each new segment so the sweep replays cleanly */}
-      <span
-        key={sweepKey}
-        className={`flow-ring ${sweep ? "sweep" : ""}`}
-        style={{ "--flow": flowColor, animationDelay: `${flowDelay}ms` } as CSSProperties}
-      />
-
       <div className="flex items-center justify-between">
         <span className="font-display text-[17px] font-semibold leading-none" style={{ color: meta.color }}>
           {meta.label}
@@ -100,4 +84,4 @@ export function AgentCard({
       </div>
     </div>
   );
-}
+});

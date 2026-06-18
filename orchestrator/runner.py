@@ -37,7 +37,7 @@ import httpx
 
 from bench.events import read_events
 from orchestrator import run_config
-from orchestrator.config import LOCAL_BASE_URL, aimlapi_key, get_agent
+from orchestrator.config import LOCAL_AGENTS_URL, LOCAL_LARGE_URL, aimlapi_key, get_agent
 
 ROOT = Path(__file__).resolve().parent.parent
 EVENTS_DIR = ROOT / "results" / "events"
@@ -148,6 +148,9 @@ class RunManager:
                     **child_base,
                     "QUARTET_AUTO_SUBSCRIBE": "1",
                     "QUARTET_ROOM_ID": room_id,
+                    # The four agents run the small coder model on the agents server (:8081); only the
+                    # large competitor uses the Qwen3.6 server (:8080), so the race is truly parallel.
+                    "LOCAL_BASE_URL": LOCAL_AGENTS_URL,
                     **run_config.role_env(role, cfg),
                 }
                 self._spawn(["-m", f"agents.{role}"], env, run_id, role)
@@ -165,7 +168,7 @@ class RunManager:
             large = cfg["large"]
             self._spawn(
                 ["-m", "bench.baselines", "--live", "--task", task_id, "--model", large["model"], "--role", "single_large"],
-                {**child_base, "LLM_PROVIDER": large["provider"]},
+                {**child_base, "LLM_PROVIDER": large["provider"], "LOCAL_BASE_URL": LOCAL_LARGE_URL},
                 run_id, "single_large",
             )
 
@@ -294,20 +297,23 @@ def _fatal_config_error() -> str | None:
 
 def _preflight() -> list[str]:
     """Best-effort check that the selected inference endpoints are reachable. Warnings only; the run
-    still starts so a judge sees the agents connect and any failure surfaces in the stream."""
+    still starts so a judge sees the agents connect and any failure surfaces in the stream. Two local
+    servers in the default topology: the agents on :8081, the large competitor on :8080."""
     warnings: list[str] = []
     cfg = run_config.load()
-    providers = {a["provider"] for a in cfg["agents"].values()} | {cfg["large"]["provider"]}
-    if "local" in providers and not _local_up():
-        warnings.append(f"local model server not reachable at {LOCAL_BASE_URL} (start it for live runs)")
-    if "aimlapi" in providers and not _aiml_key():
+    agent_providers = {a["provider"] for a in cfg["agents"].values()}
+    if "local" in agent_providers and not _local_up(LOCAL_AGENTS_URL):
+        warnings.append(f"agents model server not reachable at {LOCAL_AGENTS_URL} (start it for live runs)")
+    if cfg["large"]["provider"] == "local" and not _local_up(LOCAL_LARGE_URL):
+        warnings.append(f"large model server not reachable at {LOCAL_LARGE_URL} (start it for live runs)")
+    if ("aimlapi" in agent_providers or cfg["large"]["provider"] == "aimlapi") and not _aiml_key():
         warnings.append("no aimlapi key found (set aiml_api_key in agent_config.yaml or AIML_API_KEY in .env)")
     return warnings
 
 
-def _local_up() -> bool:
+def _local_up(url: str) -> bool:
     try:
-        httpx.get(LOCAL_BASE_URL.rstrip("/") + "/models", timeout=2.0)
+        httpx.get(url.rstrip("/") + "/models", timeout=2.0)
         return True
     except httpx.HTTPError:
         return False

@@ -21,6 +21,13 @@ from orchestrator.config import _AIML_DEFAULTS, LOCAL_MODEL
 _PATH = Path(__file__).resolve().parent / "run_config.json"
 ROLES = ["spec", "coder", "tester", "repairer"]
 
+# Display/label model names for the default two-server local topology. These drive the UI agent-card
+# labels and the race lane (via models_map); for a local llama-server the name is otherwise cosmetic
+# (the server serves whatever GGUF it loaded). The agents run a small coder model (:8081); the large
+# competitor is Qwen3.6 (:8080). Override with AGENTS_MODEL / LARGE_MODEL.
+_AGENTS_MODEL_DEFAULT = os.environ.get("AGENTS_MODEL", "WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B")
+_LARGE_MODEL_DEFAULT = os.environ.get("LARGE_MODEL", "Qwen3.6-35B-A3B")
+
 
 def _default_agent(role: str, provider: str) -> dict:
     env_model = os.environ.get(f"{role.upper()}_MODEL")
@@ -29,7 +36,7 @@ def _default_agent(role: str, provider: str) -> dict:
     elif provider == "aimlapi":
         model = _AIML_DEFAULTS.get(role, LOCAL_MODEL)
     else:
-        model = LOCAL_MODEL
+        model = _AGENTS_MODEL_DEFAULT
     return {"provider": provider, "model": model}
 
 
@@ -40,7 +47,7 @@ def defaults() -> dict:
         "agents": {role: _default_agent(role, provider) for role in ROLES},
         "large": {
             "provider": "local",
-            "model": os.environ.get("LARGE_MODEL", LOCAL_MODEL),
+            "model": _LARGE_MODEL_DEFAULT,
         },
     }
 
