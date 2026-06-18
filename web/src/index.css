@@ -6,18 +6,20 @@
   color-scheme: dark;
 
   --bg: #000000;
-  /* Raised panels on a pure-black stage: lifted surfaces + stronger borders so blocks separate. */
-  --panel: rgba(255, 255, 255, 0.055);
-  --panel-2: rgba(255, 255, 255, 0.085);
-  --line: rgba(255, 255, 255, 0.16);
-  --line-strong: rgba(255, 255, 255, 0.3);
-  /* faint 1px top highlight + drop shadow that reads as elevation on black */
-  --elevate: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 1px 2px rgba(0, 0, 0, 0.6),
-    0 8px 24px -16px rgba(0, 0, 0, 0.9);
+  /* Raised panels on a pure-black stage. Solid charcoal surfaces + stronger borders + brighter dim text
+     so every block, the agent cards, and the Tester suite clearly separate from the black (the bg stays
+     pure black on purpose). */
+  --panel: #15171d;
+  --panel-2: #1c1f27;
+  --line: rgba(255, 255, 255, 0.22);
+  --line-strong: rgba(255, 255, 255, 0.4);
+  /* 1px top highlight + drop shadow that reads as elevation on black */
+  --elevate: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.7),
+    0 10px 30px -18px rgba(0, 0, 0, 0.95);
 
   --text: #fafafa;
-  --text-2: #c6c6d0;
-  --text-3: #969aa6;
+  --text-2: #d7d9e3;
+  --text-3: #aeb2c0;
 
   --spec: #38bdf8;
   --coder: #a78bfa;
@@ -75,9 +77,138 @@ body::after {
   box-shadow: var(--elevate);
 }
 
-/* The handoff light (one colour-morphing travelling glow that hands off source->destination, plus a slow
-   "thinking" circle around the working card) is an SVG in SignalFlow.tsx; it reads prefers-reduced-motion
-   itself and simply does not animate when reduce is set. */
+/* The handoff light IS each card's OWN border, not a redrawn overlay. `.flow-ring` is a child of every
+   AgentCard, inset:0 with border-radius:inherit, masked to a 1px conic-gradient ring so it traces that
+   exact card outline. `--flow-angle` (a registered @property so it interpolates) rotates the bright arc:
+   `.flow-sweep` runs one eased lap on a handoff, `.flow-loop` circles continuously while the agent thinks.
+   The connector gap shows a travelling `.flow-pulse` dot. All CSS-driven (no per-frame JS, no SVG filter)
+   so it is smooth, and disabled under prefers-reduced-motion. */
+
+@property --flow-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.flow-ring {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  border-radius: inherit;
+  padding: 1.5px; /* ring thickness; sits right on the card's 1px border */
+  pointer-events: none;
+  opacity: 0;
+  background: conic-gradient(
+    from var(--flow-angle),
+    transparent 0deg,
+    var(--flow-color, #fff) 55deg,
+    transparent 130deg
+  );
+  /* show the gradient only in the 1.5px padding band -> a ring that follows the rounded corners */
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+
+.flow-sweep {
+  animation: flowSweep 900ms cubic-bezier(0.4, 0, 0.2, 1) var(--flow-delay, 0ms) both;
+}
+
+.flow-loop {
+  opacity: 1;
+  animation: flowLoop 2600ms linear infinite;
+}
+
+@keyframes flowSweep {
+  0% {
+    --flow-angle: 0deg;
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    --flow-angle: 360deg;
+    opacity: 0;
+  }
+}
+
+@keyframes flowLoop {
+  0% {
+    --flow-angle: 0deg;
+  }
+  100% {
+    --flow-angle: 360deg;
+  }
+}
+
+/* connector gap pulse: a small dot crossing the hairline, source-colour core fading to destination */
+.flow-pulse {
+  position: absolute;
+  top: 50%;
+  margin-top: -3px;
+  height: 6px;
+  width: 6px;
+  border-radius: 9999px;
+  opacity: 0;
+  background: radial-gradient(circle, var(--pt, #fff) 0%, var(--pf, #fff) 65%, transparent 100%);
+  box-shadow: 0 0 8px 1px var(--pt, #fff);
+  animation: flowPulse 760ms cubic-bezier(0.4, 0, 0.2, 1) var(--flow-delay, 0ms) both;
+}
+
+.flow-pulse-rev {
+  animation-name: flowPulseRev;
+}
+
+@keyframes flowPulse {
+  0% {
+    left: -3px;
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    left: calc(100% - 3px);
+    opacity: 0;
+  }
+}
+
+@keyframes flowPulseRev {
+  0% {
+    left: calc(100% - 3px);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+  }
+  100% {
+    left: -3px;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .flow-sweep,
+  .flow-loop {
+    animation: none;
+    opacity: 0.85;
+  }
+  .flow-pulse {
+    animation: none;
+    opacity: 0;
+  }
+}
 
 .font-display {
   font-family: var(--font-display);

@@ -10,7 +10,7 @@ export function TestPanel({ room }: { room: RoomState }) {
   return (
     <section className="flex h-full flex-col rounded-xl panel-raised">
       <header className="flex items-center justify-between border-b border-[var(--line)] px-4 py-2.5">
-        <span className="font-mono text-[12px] uppercase tracking-[0.22em] text-[var(--text-3)]">tester suite</span>
+        <span className="font-mono text-[12px] uppercase tracking-[0.22em] text-[var(--text-2)]">tester suite</span>
         <span className="font-mono text-[12px] tabular-nums" style={{ color: tone }}>
           {nTotal > 0 ? `${nPass}/${nTotal} pass` : runs > 0 ? "ran" : "idle"}
           {runs > 0 ? ` / run ${runs}` : ""}

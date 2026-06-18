@@ -1,61 +1,57 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import { ACTIVE_PHASES, signalOrder } from "../theme";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import type { CSSProperties } from "react";
+import { ACTIVE_PHASES, roleMeta, signalOrder } from "../theme";
 import type { RoomState, Role } from "../types";
-import { useFlowState } from "../useFlowState";
-import { AgentCard } from "./AgentCard";
-import { SignalFlow, type CardRect } from "./SignalFlow";
+import { useFlowState, type FlowSegment } from "../useFlowState";
+import { AgentCard, type RingState } from "./AgentCard";
 
-interface Measured {
-  rects: Record<Role, CardRect> | null;
-  width: number;
-  height: number;
+const FAIL = "#f43f5e";
+const STEP = 300; // stagger between path elements (node, connector, node ...)
+const SWEEP_MS = 900; // one ring sweep lap (matches the .flow-sweep keyframe in index.css)
+
+interface FlowPlan {
+  nodes: Partial<Record<Role, { color: string; delay: number }>>;
+  connectors: Record<number, { from: string; to: string; reverse: boolean; delay: number }>;
+  arriveDelay: number; // when the destination ignites
+  doneDelay: number; // when the whole handoff is finished
 }
 
-// Measure each card's real rounded-rect relative to the rail, so the single travelling glow hugs the
-// actual borders (1 SVG unit == 1px, no viewBox scaling). Re-measures on resize, after web fonts load,
-// and observes every card (not just the rail) so a late layout shift can never drift the path.
-function useMeasure(
-  railRef: React.RefObject<HTMLDivElement | null>,
-  cardRefs: React.MutableRefObject<Partial<Record<Role, HTMLElement | null>>>,
-): Measured {
-  const [m, setM] = useState<Measured>({ rects: null, width: 0, height: 0 });
-  const fn = useRef<() => void>(() => {});
-  useEffect(() => {
-    function measure() {
-      const rail = railRef.current;
-      if (!rail) return;
-      const rb = rail.getBoundingClientRect();
-      const out: Partial<Record<Role, CardRect>> = {};
-      for (const role of signalOrder) {
-        const el = cardRefs.current[role];
-        if (!el) return; // not mounted yet; observers retry
-        const b = el.getBoundingClientRect();
-        out[role] = { x: b.left - rb.left, y: b.top - rb.top, width: b.width, height: b.height };
+// Lay out the handoff as a staggered chain of real cards + connectors from source to destination, so the
+// light flows source -> connector -> destination (and back through the intermediate cards on a repair
+// bounce). Each element gets an increasing delay; the destination ignites when its sweep begins. Forward
+// uses each role's colour; a repair bounce is fail-red throughout.
+function planFlow(seg: FlowSegment): FlowPlan {
+  const fi = signalOrder.indexOf(seg.from);
+  const ti = signalOrder.indexOf(seg.to);
+  const nodes: FlowPlan["nodes"] = {};
+  const connectors: FlowPlan["connectors"] = {};
+  const fail = seg.mode === "repair";
+  const colorOf = (role: Role) => (fail ? FAIL : roleMeta[role].color);
+  let k = 0;
+
+  if (ti >= fi) {
+    for (let i = fi; i <= ti; i++) {
+      nodes[signalOrder[i]] = { color: colorOf(signalOrder[i]), delay: k * STEP };
+      k++;
+      if (i < ti) {
+        connectors[i] = { from: colorOf(signalOrder[i]), to: colorOf(signalOrder[i + 1]), reverse: false, delay: k * STEP };
+        k++;
       }
-      // fractional getBoundingClientRect (not integer clientWidth) keeps the SVG units pixel-exact
-      setM({ rects: out as Record<Role, CardRect>, width: rb.width, height: rb.height });
     }
-    fn.current = measure;
-    measure();
-    const rail = railRef.current;
-    if (!rail) return;
-    const onResize = () => fn.current();
-    const ro = new ResizeObserver(onResize);
-    ro.observe(rail);
-    for (const role of signalOrder) {
-      const el = cardRefs.current[role];
-      if (el) ro.observe(el);
+  } else {
+    for (let i = fi; i >= ti; i--) {
+      nodes[signalOrder[i]] = { color: colorOf(signalOrder[i]), delay: k * STEP };
+      k++;
+      if (i > ti) {
+        // connector between i-1 and i, travelled right-to-left
+        connectors[i - 1] = { from: colorOf(signalOrder[i]), to: colorOf(signalOrder[i - 1]), reverse: true, delay: k * STEP };
+        k++;
+      }
     }
-    window.addEventListener("resize", onResize);
-    if (typeof document !== "undefined" && document.fonts && document.fonts.ready) {
-      document.fonts.ready.then(() => fn.current());
-    }
-    return () => {
-      ro.disconnect();
-      window.removeEventListener("resize", onResize);
-    };
-  }, [railRef, cardRefs]);
-  return m;
+  }
+
+  const arriveDelay = nodes[seg.to]?.delay ?? 0;
+  return { nodes, connectors, arriveDelay, doneDelay: arriveDelay + SWEEP_MS };
 }
 
 export function AgentRail({
@@ -67,23 +63,18 @@ export function AgentRail({
   focus: Role | null;
   onFocus: (r: Role) => void;
 }) {
-  const railRef = useRef<HTMLDivElement>(null);
-  const cardRefs = useRef<Partial<Record<Role, HTMLElement | null>>>({});
-  const { rects, width, height } = useMeasure(railRef, cardRefs);
-
-  // Raw room transition (forward vs repair) -> the comet currently in flight.
+  // Raw room transition (forward vs repair) -> the handoff currently in flight.
   const segment = useFlowState(room);
-  // The card showing the steady "active" glow. It only moves to the destination when the comet ARRIVES,
+  // The card showing the steady "active" glow. It only moves to the destination when the sweep ARRIVES,
   // so a card never lights before the handoff reaches it.
   const [litRole, setLitRole] = useState<Role | null>(null);
-  const [activeTransfer, setActiveTransfer] = useState<typeof segment>(null);
+  const [activeTransfer, setActiveTransfer] = useState<FlowSegment | null>(null);
 
-  // Start a comet on each new segment; keep litRole on the source until onArrive lands it on the dest.
   useEffect(() => {
     if (segment) setActiveTransfer(segment);
   }, [segment?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // First activation (no previous role, e.g. conductor -> spec): ignite the first card directly, no comet.
+  // first activation (conductor -> spec): ignite the first card directly, no sweep
   useEffect(() => {
     if (
       litRole === null &&
@@ -96,35 +87,53 @@ export function AgentRail({
     }
   }, [room.activeRole, room.finished, litRole, activeTransfer]);
 
-  // Clear the comet when the run ends.
   useEffect(() => {
     if (room.finished) setActiveTransfer(null);
   }, [room.finished]);
 
-  const onArrive = useCallback((r: Role) => setLitRole(r), []);
-  const onComplete = useCallback((id: number) => {
-    setActiveTransfer((cur) => (cur && cur.id === id ? null : cur));
-  }, []);
+  const plan = useMemo(() => (activeTransfer ? planFlow(activeTransfer) : null), [activeTransfer?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The lit card circles ("thinking") only once the comet has fully landed (no transfer in flight) and
-  // while that agent is actually working - so the comet and the circle are never both in motion.
+  // Drive arrival (destination ignite) and completion with one-shot timers, so CSS owns the motion and a
+  // mid-handoff state update never interrupts a frame (the old SVG rAF + filter was the stutter source).
+  useEffect(() => {
+    if (!activeTransfer || !plan) return;
+    const id = activeTransfer.id;
+    const dest = activeTransfer.to;
+    const t1 = window.setTimeout(() => setLitRole(dest), plan.arriveDelay);
+    const t2 = window.setTimeout(
+      () => setActiveTransfer((cur) => (cur && cur.id === id ? null : cur)),
+      plan.doneDelay,
+    );
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [activeTransfer?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The lit card circles ("thinking") only once the handoff has fully landed (no transfer in flight) and
+  // while that agent is actually working, so a sweep and the circle are never both in motion.
   const litWorking =
     litRole !== null && !room.finished && ACTIVE_PHASES.has(room.agents[litRole].phase);
   const thinkingRole = !activeTransfer && litWorking ? litRole : null;
 
-  const card = (role: Role, withRef: boolean) => (
+  const ringFor = (role: Role): RingState | null => {
+    if (activeTransfer && plan && plan.nodes[role]) {
+      const n = plan.nodes[role]!;
+      return { mode: "sweep", color: n.color, delay: n.delay, key: `s${activeTransfer.id}-${role}` };
+    }
+    if (thinkingRole === role) {
+      return { mode: "loop", color: roleMeta[role].color, delay: 0, key: `loop-${role}` };
+    }
+    return null;
+  };
+
+  const card = (role: Role) => (
     <AgentCard
-      ref={
-        withRef
-          ? (el) => {
-              cardRefs.current[role] = el;
-            }
-          : undefined
-      }
       role={role}
       state={room.agents[role]}
       active={litRole === role && !room.finished}
       thinking={thinkingRole === role}
+      ring={ringFor(role)}
       selected={focus === role}
       onSelect={() => onFocus(role)}
     />
@@ -132,35 +141,49 @@ export function AgentRail({
 
   return (
     <div>
-      {/* md+: stations on one signal path; a single travelling glow runs along their borders on handoff */}
-      <div ref={railRef} className="relative hidden items-stretch md:flex">
-        <SignalFlow
-          rects={rects}
-          containerWidth={width}
-          containerHeight={height}
-          transfer={activeTransfer}
-          thinkingRole={thinkingRole}
-          onArrive={onArrive}
-          onComplete={onComplete}
-        />
+      {/* md+: stations on one signal path; the light sweeps each card's OWN border and pulses the gaps */}
+      <div className="hidden items-stretch md:flex">
         {signalOrder.map((role, i) => (
           <Fragment key={role}>
-            <div className="flex-1">{card(role, true)}</div>
+            <div className="flex-1">{card(role)}</div>
             {i < signalOrder.length - 1 && (
-              <div className="hidden w-8 shrink-0 items-center md:flex" aria-hidden>
-                <div className="h-px w-full" style={{ background: "var(--line)" }} />
-              </div>
+              <Connector conn={plan?.connectors[i] ?? null} transferId={activeTransfer?.id ?? 0} />
             )}
           </Fragment>
         ))}
       </div>
 
-      {/* mobile: 2-col grid, no connectors or flow overlay */}
+      {/* mobile: 2-col grid, no connectors (rings still sweep on each card) */}
       <div className="grid grid-cols-2 gap-3 md:hidden">
         {signalOrder.map((role) => (
-          <Fragment key={role}>{card(role, false)}</Fragment>
+          <Fragment key={role}>{card(role)}</Fragment>
         ))}
       </div>
+    </div>
+  );
+}
+
+// The gap between two stations: a static hairline plus a travelling pulse dot during a handoff (CSS-only,
+// no measurement). Colour morphs from the source to the destination role; a repair bounce travels reverse.
+function Connector({
+  conn,
+  transferId,
+}: {
+  conn: { from: string; to: string; reverse: boolean; delay: number } | null;
+  transferId: number;
+}) {
+  return (
+    <div className="relative hidden w-8 shrink-0 items-center md:flex" aria-hidden>
+      <div className="h-px w-full" style={{ background: "var(--line)" }} />
+      {conn && (
+        <span
+          key={`${transferId}-c-${conn.delay}`}
+          className={`flow-pulse${conn.reverse ? " flow-pulse-rev" : ""}`}
+          style={
+            { "--pf": conn.from, "--pt": conn.to, "--flow-delay": `${conn.delay}ms` } as CSSProperties
+          }
+        />
+      )}
     </div>
   );
 }

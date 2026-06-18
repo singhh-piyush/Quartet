@@ -1,4 +1,3 @@
-import { forwardRef } from "react";
 import type { CSSProperties } from "react";
 import type { AgentState, Role } from "../types";
 import { ACTIVE_PHASES, fmtInt, phaseLabel, roleMeta } from "../theme";
@@ -9,37 +8,58 @@ export function shortModel(model: string): string {
   return tail.replace(/-Instruct$/i, "").replace(/-Turbo$/i, "");
 }
 
+// The handoff light IS the card's own border. `.flow-ring` is a child masked to a 1px conic-gradient ring
+// at inset:0 with border-radius:inherit, so it traces THIS card's real outline (no second border, no
+// measurement). `sweep` runs one eased lap on a handoff; `loop` circles continuously while the agent
+// thinks. Driven purely by CSS so it never stutters. AgentRail sets the mode/colour/delay.
+export interface RingState {
+  mode: "sweep" | "loop";
+  color: string;
+  delay: number;
+  key: string;
+}
+
 export interface AgentNodeProps {
   role: Role;
   state: AgentState;
   active: boolean;
   thinking?: boolean;
+  ring?: RingState | null;
   onSelect?: () => void;
   selected?: boolean;
 }
 
-// A compact station on the signal path. The handoff light is NOT drawn here; a single travelling glow
-// (SignalFlow) runs along these cards' real borders. `active` is gated on the comet ARRIVING (litRole),
-// not on the raw activeRole, so a card only lights once the transfer reaches it. `thinking` intensifies
-// the steady glow while the agent works (the slow circling ring is also drawn by SignalFlow).
-export const AgentCard = forwardRef<HTMLDivElement, AgentNodeProps>(function AgentCard(
-  { role, state, active, thinking = false, onSelect, selected = false },
-  ref,
-) {
+// A compact station on the signal path. `active` is gated on the handoff ARRIVING (litRole), not the raw
+// activeRole, so a card only ignites once the transfer reaches it. `thinking` intensifies the steady glow
+// while the agent works; the circling ring is the `.flow-ring` child driven by `ring`.
+export function AgentCard({
+  role,
+  state,
+  active,
+  thinking = false,
+  ring = null,
+  onSelect,
+  selected = false,
+}: AgentNodeProps) {
   const meta = roleMeta[role];
   const live = state.connected;
   const pulsing = active && ACTIVE_PHASES.has(state.phase);
-  const ring = active ? meta.color : selected ? `${meta.color}88` : live ? "var(--line)" : "rgba(255,255,255,0.08)";
+  const border = active
+    ? meta.color
+    : selected
+      ? `${meta.color}88`
+      : live
+        ? "var(--line)"
+        : "rgba(255,255,255,0.08)";
 
   return (
     <div
-      ref={ref}
       onClick={onSelect}
       className={`relative flex min-h-[96px] flex-col rounded-lg border bg-[var(--panel)] px-3.5 py-3 transition-all duration-500 ease-spring ${
         onSelect ? "cursor-pointer" : ""
       }`}
       style={{
-        borderColor: ring,
+        borderColor: border,
         boxShadow: active
           ? `0 0 0 1px ${meta.color}, 0 0 ${thinking ? 34 : 24}px -6px ${meta.color}${thinking ? "99" : "66"}, var(--elevate)`
           : selected
@@ -48,6 +68,15 @@ export const AgentCard = forwardRef<HTMLDivElement, AgentNodeProps>(function Age
         opacity: live ? 1 : 0.45,
       }}
     >
+      {ring && (
+        <span
+          key={ring.key}
+          aria-hidden
+          className={`flow-ring ${ring.mode === "loop" ? "flow-loop" : "flow-sweep"}`}
+          style={{ "--flow-color": ring.color, "--flow-delay": `${ring.delay}ms` } as CSSProperties}
+        />
+      )}
+
       <div className="flex items-center justify-between">
         <span className="font-display text-[17px] font-semibold leading-none" style={{ color: meta.color }}>
           {meta.label}
@@ -84,4 +113,4 @@ export const AgentCard = forwardRef<HTMLDivElement, AgentNodeProps>(function Age
       </div>
     </div>
   );
-});
+}

@@ -164,7 +164,7 @@ export function BandRoom({
       <header className="flex items-center justify-between border-b border-[var(--line)] px-4 py-2.5">
         <div className="flex items-baseline gap-2">
           <span className="font-display text-[15px] font-semibold text-[var(--text)]">Band room</span>
-          <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--text-3)]">
+          <span className="font-mono text-[11px] uppercase tracking-[0.22em] text-[var(--text-2)]">
             four agents, one thread
           </span>
         </div>
