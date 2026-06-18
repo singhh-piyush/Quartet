@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { roleMeta } from "../theme";
+import { PROVIDERS } from "../types";
 import type { ModelConfig, RunStatus } from "../types";
 
 const ROLES = ["spec", "coder", "tester", "repairer"] as const;
-const PROVIDERS = ["local", "aimlapi"] as const;
 const SUGGESTIONS = [
   "Qwen/Qwen2.5-Coder-7B-Instruct",
   "Qwen/Qwen2.5-Coder-32B-Instruct",

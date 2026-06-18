@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ModelConfig, ModelSlot, RunStatus } from "../types";
-import { ModelDashboard } from "./ModelDashboard";
+import { StackBuilder } from "./StackBuilder";
 
 const TASKS = [
   "HumanEval/0",
@@ -35,6 +35,8 @@ export function LiveConsole({
   models,
   saving,
   onUpdate,
+  onPatchMany,
+  onReloadModels,
   onRun,
   onStop,
   onReplay,
@@ -43,6 +45,8 @@ export function LiveConsole({
   models: ModelConfig | null;
   saving: boolean;
   onUpdate: (target: string, patch: Partial<ModelSlot>) => void;
+  onPatchMany: (patch: Partial<ModelConfig>) => void;
+  onReloadModels: () => void;
   onRun: (taskId: string) => void;
   onStop: () => void;
   onReplay: () => void;
@@ -106,7 +110,7 @@ export function LiveConsole({
               showModels ? "border-[var(--line-strong)] text-white" : "border-[var(--line)] text-[var(--text-2)] hover:text-white"
             }`}
           >
-            Models
+            Stacks
           </button>
           <button
             onClick={onReplay}
@@ -135,12 +139,13 @@ export function LiveConsole({
 
       {showModels && (
         <div className="mt-3">
-          <ModelDashboard
+          <StackBuilder
             models={models}
             status={status}
             saving={saving}
-            onSlot={(t, m) => onUpdate(t, { model: m })}
-            onProvider={(t, p) => onUpdate(t, { provider: p })}
+            onUpdate={onUpdate}
+            onPatchMany={onPatchMany}
+            onReloadModels={onReloadModels}
           />
         </div>
       )}

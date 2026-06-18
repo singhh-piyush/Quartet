@@ -37,7 +37,18 @@ import httpx
 
 from bench.events import read_events
 from orchestrator import run_config
-from orchestrator.config import LOCAL_AGENTS_URL, LOCAL_LARGE_URL, aimlapi_key, get_agent
+from orchestrator.config import (
+    AIMLAPI_BASE_URL,
+    GROQ_BASE_URL,
+    LOCAL_AGENTS_URL,
+    LOCAL_LARGE_URL,
+    aimlapi_key,
+    get_agent,
+    provider_secret,
+)
+
+# Providers that need a key/base resolved server-side before a run can produce inference.
+_KEYED_PROVIDERS = ("groq", "aimlapi", "openai_compatible")
 
 ROOT = Path(__file__).resolve().parent.parent
 EVENTS_DIR = ROOT / "results" / "events"
@@ -269,28 +280,51 @@ def _aiml_key() -> str | None:
     return aimlapi_key()
 
 
+def _missing_key_message(provider: str) -> str:
+    """Why a keyed provider cannot run, with where to put the key."""
+    if provider == "aimlapi":
+        return (
+            "agents/large use the aimlapi provider but no aimlapi key is set. Add it in the dashboard "
+            "(Build your stack), or as `aiml_api_key: <key>` in agent_config.yaml / AIML_API_KEY in .env. "
+            "The band_ keys authenticate the Band chat room, not model inference - aimlapi needs its own."
+        )
+    if provider == "groq":
+        return (
+            "agents/large use the groq provider but no groq key is set. Add it in the dashboard "
+            "(Build your stack), or set GROQ_API_KEY in .env."
+        )
+    return (
+        "agents/large use the openai_compatible provider but no base_url is set. Add it in the dashboard "
+        "(Build your stack), or set OPENAI_COMPAT_BASE_URL in .env."
+    )
+
+
+def _provider_unrunnable(provider: str) -> bool:
+    """True when a keyed provider lacks the secret it needs to make any call at all."""
+    secret = provider_secret(provider)
+    if provider == "openai_compatible":
+        return not secret.get("base_url")
+    return not secret.get("api_key")
+
+
 def _fatal_config_error() -> str | None:
     """Return a clear message when the run cannot possibly produce agent inference, so start() can
-    refuse instead of spawning agents that die immediately. The unambiguous cases are fatal: agents
-    set to aimlapi with no key at all, or with a key that is actually a band_ chat-room key (which
-    aimlapi rejects). A local server being down is a warning (it may come up during the connect
-    window), handled by _preflight."""
+    refuse instead of spawning agents that die immediately. Fatal cases: a keyed provider (groq,
+    aimlapi, openai_compatible) selected with no key/base, or an aimlapi key that is actually a band_
+    chat-room key (which aimlapi rejects). A local server being down is a warning (it may come up
+    during the connect window), handled by _preflight."""
     cfg = run_config.load()
-    agent_providers = {a["provider"] for a in cfg["agents"].values()}
-    if "aimlapi" in agent_providers:
+    used = {a["provider"] for a in cfg["agents"].values()} | {cfg["large"]["provider"]}
+    for provider in _KEYED_PROVIDERS:
+        if provider in used and _provider_unrunnable(provider):
+            return _missing_key_message(provider)
+    if "aimlapi" in used:
         key = _aiml_key()
-        if not key:
-            return (
-                "agents are set to the aimlapi provider but no aimlapi key is set. Add it to "
-                "agent_config.yaml as `aiml_api_key: <key>` (or AIML_API_KEY in .env), or switch the "
-                "agents to the local provider in Models. The band_ keys in agent_config.yaml "
-                "authenticate the Band chat room, not the model inference - aimlapi needs its own key."
-            )
-        if key.startswith("band_"):
+        if key and key.startswith("band_"):
             return (
                 "the aimlapi key looks like a Band chat-room key (it starts with 'band_'). aimlapi "
-                "will reject it. Put your aimlapi inference key (from aimlapi.com) in agent_config.yaml "
-                "as `aiml_api_key: <key>`, or switch the agents to the local provider in Models."
+                "will reject it. Put your aimlapi inference key (from aimlapi.com) in the dashboard or "
+                "agent_config.yaml as `aiml_api_key: <key>`, or switch to the local provider in Models."
             )
     return None
 
@@ -306,8 +340,6 @@ def _preflight() -> list[str]:
         warnings.append(f"agents model server not reachable at {LOCAL_AGENTS_URL} (start it for live runs)")
     if cfg["large"]["provider"] == "local" and not _local_up(LOCAL_LARGE_URL):
         warnings.append(f"large model server not reachable at {LOCAL_LARGE_URL} (start it for live runs)")
-    if ("aimlapi" in agent_providers or cfg["large"]["provider"] == "aimlapi") and not _aiml_key():
-        warnings.append("no aimlapi key found (set aiml_api_key in agent_config.yaml or AIML_API_KEY in .env)")
     return warnings
 
 
@@ -317,3 +349,58 @@ def _local_up(url: str) -> bool:
         return True
     except httpx.HTTPError:
         return False
+
+
+def _provider_base_key(provider: str) -> tuple[str | None, str | None]:
+    """The OpenAI-compatible base URL and key for a provider's /models call (validation + dropdowns).
+    local uses the agents server (no key). Returns (base_url, api_key); base_url None when unresolved."""
+    if provider == "local":
+        return LOCAL_AGENTS_URL, None
+    if provider == "groq":
+        return GROQ_BASE_URL, provider_secret("groq").get("api_key")
+    if provider == "aimlapi":
+        return AIMLAPI_BASE_URL, provider_secret("aimlapi").get("api_key")
+    if provider == "openai_compatible":
+        secret = provider_secret("openai_compatible")
+        return secret.get("base_url"), secret.get("api_key")
+    return None, None
+
+
+def _models_url(base: str) -> str:
+    return base.rstrip("/") + "/models"
+
+
+def list_provider_models(provider: str) -> dict:
+    """Fetch the provider's model id list via GET <base>/models (used to populate the dashboard
+    dropdowns). Never returns or logs the key. Returns {models: [...]} or {models: [], note: ...}."""
+    base, key = _provider_base_key(provider)
+    if not base:
+        return {"models": [], "note": "no base_url set for this provider"}
+    if provider in _KEYED_PROVIDERS and not key and provider != "openai_compatible":
+        return {"models": [], "note": "no key set for this provider"}
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    try:
+        resp = httpx.get(_models_url(base), headers=headers, timeout=8.0)
+        resp.raise_for_status()
+        data = resp.json()
+    except (httpx.HTTPError, ValueError) as e:
+        return {"models": [], "note": f"could not list models: {str(e)[:120]}"}
+    rows = data.get("data", data) if isinstance(data, dict) else data
+    ids = sorted({r.get("id") for r in rows if isinstance(r, dict) and r.get("id")}) if isinstance(rows, list) else []
+    return {"models": ids}
+
+
+def validate_provider(provider: str) -> dict:
+    """Reuse the preflight to check a provider is usable: local -> server reachable; a keyed provider
+    -> its /models call returns 200 with the stored key. Returns {ok, detail}. Never echoes the key."""
+    if provider == "local":
+        up = _local_up(LOCAL_AGENTS_URL)
+        return {"ok": up, "detail": f"agents server {'reachable' if up else 'not reachable'} at {LOCAL_AGENTS_URL}"}
+    if provider not in _KEYED_PROVIDERS:
+        return {"ok": False, "detail": f"unknown provider {provider!r}"}
+    if _provider_unrunnable(provider):
+        return {"ok": False, "detail": "no key/base_url set for this provider"}
+    result = list_provider_models(provider)
+    if result.get("models"):
+        return {"ok": True, "detail": f"endpoint reachable, {len(result['models'])} models available"}
+    return {"ok": False, "detail": result.get("note", "endpoint did not return any models")}

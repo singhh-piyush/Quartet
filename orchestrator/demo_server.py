@@ -15,6 +15,14 @@ Endpoints:
   GET  /api/transcript?run_id=                     full agent reasoning (bodies) for the run
   GET  /api/models                                 per-agent + large model selection (names only)
   POST /api/models                                 save the model selection
+  GET  /api/keys                                   which providers have a key (booleans, never values)
+  POST /api/keys    {provider, api_key, base_url?} store a provider key server-side
+  GET  /api/provider_models?provider=              list a provider's model ids (for the dropdowns)
+  POST /api/validate {provider}                    check a provider is usable (reuses the preflight)
+  GET  /api/stacks                                 list named agent stacks (no keys)
+  POST /api/stacks  {name, config}                 save a named stack (Save As)
+  POST /api/stacks/load {name}                     load a stack into the active config
+  POST /api/stacks/duplicate {name, new_name}      copy a stack under a new name
   GET  /api/agents                                 live run + agent process status
   POST /api/run     {task_id}                      start a real live Quartet run + large race
   POST /api/stop                                   stop the active run
@@ -41,8 +49,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from bench.events import read_events
-from orchestrator import run_config
-from orchestrator.runner import RunManager
+from orchestrator import run_config, stacks
+from orchestrator.config import key_status, save_provider_key
+from orchestrator.runner import RunManager, list_provider_models, validate_provider
 
 ROOT = Path(__file__).resolve().parent.parent
 RESULTS = ROOT / "results"
@@ -208,6 +217,45 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").split(":")[0].strip().lower()
         return host in ("127.0.0.1", "localhost", "[::1]", "::1", "")
 
+    # ---- control plane: keys + stacks (POST handlers; key values never returned) ----
+
+    def _handle_save_key(self, body: dict) -> None:
+        provider = body.get("provider") or ""
+        try:
+            status = save_provider_key(provider, body.get("api_key"), body.get("base_url"))
+        except ValueError as e:
+            self._send_json({"error": str(e)}, status=400)
+            return
+        self._send_json(status)  # booleans only, never the key
+
+    def _handle_save_stack(self, body: dict) -> None:
+        name = body.get("name") or ""
+        try:
+            saved = stacks.save_stack(name, body.get("config") or {})
+        except ValueError as e:
+            self._send_json({"error": str(e)}, status=400)
+            return
+        self._send_json({"saved": saved, "stacks": stacks.list_stacks()})
+
+    def _handle_load_stack(self, body: dict) -> None:
+        name = body.get("name") or ""
+        try:
+            active = stacks.activate_stack(name)  # writes the active run_config.json
+        except (ValueError, FileNotFoundError, json.JSONDecodeError) as e:
+            self._send_json({"error": f"could not load stack: {str(e)[:120]}"}, status=400)
+            return
+        self._send_json(active)
+
+    def _handle_duplicate_stack(self, body: dict) -> None:
+        name = body.get("name") or ""
+        new_name = body.get("new_name") or ""
+        try:
+            copy = stacks.duplicate_stack(name, new_name)
+        except (ValueError, FileNotFoundError, json.JSONDecodeError) as e:
+            self._send_json({"error": f"could not duplicate stack: {str(e)[:120]}"}, status=400)
+            return
+        self._send_json({"saved": copy, "stacks": stacks.list_stacks()})
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -222,6 +270,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_transcript(parse_qs(parsed.query))
             elif path == "/api/models":
                 self._send_json(run_config.load())
+            elif path == "/api/keys":
+                self._send_json(key_status())
+            elif path == "/api/provider_models":
+                provider = (parse_qs(parsed.query).get("provider") or [""])[0]
+                self._send_json(list_provider_models(provider))
+            elif path == "/api/stacks":
+                self._send_json({"stacks": stacks.list_stacks()})
             elif path == "/api/agents":
                 self._send_json(RUNS.status())
             elif path == "/api/stream":
@@ -249,6 +304,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(RUNS.status())
             elif path == "/api/models":
                 self._send_json(run_config.save(self._read_body() or {}))
+            elif path == "/api/keys":
+                self._handle_save_key(self._read_body() or {})
+            elif path == "/api/validate":
+                provider = (self._read_body() or {}).get("provider") or ""
+                self._send_json(validate_provider(provider))
+            elif path == "/api/stacks":
+                self._handle_save_stack(self._read_body() or {})
+            elif path == "/api/stacks/load":
+                self._handle_load_stack(self._read_body() or {})
+            elif path == "/api/stacks/duplicate":
+                self._handle_duplicate_stack(self._read_body() or {})
             else:
                 self._send_json({"error": "not found"}, status=404)
         except (BrokenPipeError, ConnectionResetError):

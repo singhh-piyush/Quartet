@@ -21,4 +21,8 @@ agents:
 # model-inference keys. To run the four agents on the aimlapi provider, put your aimlapi inference
 # key here (from aimlapi.com) - it is read by orchestrator.config.aimlapi_key(). Alternatively set
 # AIML_API_KEY in .env; the env var wins if both are present. Leave blank to run agents locally.
+#
+# Inference keys for the cloud providers (groq, aimlapi, openai_compatible) are normally entered from
+# the dashboard ("Build your stack") and saved to orchestrator/provider_keys.json (gitignored), NOT
+# here. This file's aiml_api_key is only a fallback so aimlapi can also be configured from one place.
 aiml_api_key: ""

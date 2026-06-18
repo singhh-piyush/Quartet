@@ -44,6 +44,7 @@ def defaults() -> dict:
     """Seed config from the environment (LLM_PROVIDER + *_MODEL); large competitor runs local."""
     provider = os.environ.get("LLM_PROVIDER", "local")
     return {
+        "name": "default",
         "agents": {role: _default_agent(role, provider) for role in ROLES},
         "large": {
             "provider": "local",
@@ -53,14 +54,18 @@ def defaults() -> dict:
 
 
 def _merge(base: dict, override: dict) -> dict:
-    """Fill base with any present override keys, keeping shape stable."""
-    out = {"agents": {}, "large": dict(base["large"])}
-    ov_agents = (override or {}).get("agents", {})
+    """Fill base with any present override keys, keeping shape stable. `name` is a display label of the
+    active stack; agent/large slots only ever carry provider + model (never a key)."""
+    out = {"name": base.get("name", "default"), "agents": {}, "large": dict(base["large"])}
+    override = override or {}
+    if isinstance(override.get("name"), str) and override["name"].strip():
+        out["name"] = override["name"].strip()
+    ov_agents = override.get("agents", {})
     for role in ROLES:
         a = dict(base["agents"][role])
         a.update({k: v for k, v in ov_agents.get(role, {}).items() if k in ("provider", "model") and v})
         out["agents"][role] = a
-    ov_large = (override or {}).get("large", {})
+    ov_large = override.get("large", {})
     out["large"].update({k: v for k, v in ov_large.items() if k in ("provider", "model") and v})
     return out
 
@@ -75,8 +80,10 @@ def load() -> dict:
 
 
 def save(cfg: dict) -> dict:
-    """Persist a (possibly partial) config merged over defaults; return the stored result."""
-    merged = _merge(defaults(), cfg or {})
+    """Persist a (possibly partial) config, merged over the CURRENT config so a partial update changes
+    only the fields it carries and leaves the other slots intact. (load() already folds in defaults, so
+    a fresh install still starts from the environment seed.) Returns the stored result."""
+    merged = _merge(load(), cfg or {})
     _PATH.write_text(json.dumps(merged, indent=2))
     return merged
 

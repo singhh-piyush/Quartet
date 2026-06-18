@@ -121,14 +121,44 @@ export interface FeedItem {
 
 // ---- control plane ----
 
+// The selectable providers (all OpenAI-compatible). aimlapi is the closed-source path.
+export const PROVIDERS = ["local", "groq", "aimlapi", "openai_compatible"] as const;
+export type Provider = (typeof PROVIDERS)[number];
+
+// Providers that need an API key / base_url entered from the dashboard.
+export const KEYED_PROVIDERS = ["groq", "aimlapi", "openai_compatible"] as const;
+
 export interface ModelSlot {
   provider: string;
   model: string;
 }
 
 export interface ModelConfig {
+  name?: string; // active stack label
   agents: Record<string, ModelSlot>; // spec / coder / tester / repairer
   large: ModelSlot;
+}
+
+// A named, saved model selection (results/stacks/<name>.json). Same shape as ModelConfig, key-free.
+export interface StackInfo {
+  name: string;
+  mtime: number;
+  providers: string[];
+}
+
+// Per-provider key presence (booleans + the non-secret openai_compatible base_url). Never a key value.
+export interface KeyStatus {
+  [provider: string]: { has_key: boolean; base_url?: string };
+}
+
+export interface ProviderModels {
+  models: string[];
+  note?: string;
+}
+
+export interface ValidateResult {
+  ok: boolean;
+  detail: string;
 }
 
 export interface AgentProc {

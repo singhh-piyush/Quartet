@@ -39,7 +39,7 @@ export default function App() {
   const player = usePlayer(replayRunId, speed, setSpeed);
   const { status, start, stop } = useRunStatus();
   const live = useLiveRun(mode === "live" ? liveRunId : null);
-  const { models, saving, update } = useModels();
+  const { models, saving, update, patchMany, reload: reloadModels } = useModels();
 
   const room = mode === "live" ? live.room : player.room;
   const transcriptRunId = mode === "live" ? liveRunId : replayRunId;
@@ -64,6 +64,8 @@ export default function App() {
         models={models}
         saving={saving}
         onUpdate={update}
+        onPatchMany={patchMany}
+        onReloadModels={reloadModels}
         onRun={onRun}
         onStop={stop}
         onReplay={() => setMode("replay")}

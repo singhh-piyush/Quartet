@@ -1,10 +1,14 @@
 import type {
   ConfigResult,
+  KeyStatus,
   ModelConfig,
+  ProviderModels,
   QuartetEvent,
   RunInfo,
   RunStatus,
+  StackInfo,
   Transcript,
+  ValidateResult,
 } from "./types";
 
 async function getJson<T>(url: string, label: string): Promise<T> {
@@ -50,6 +54,40 @@ export function fetchModels(): Promise<ModelConfig> {
 
 export function saveModels(cfg: Partial<ModelConfig>): Promise<ModelConfig> {
   return postJson<ModelConfig>("/api/models", cfg, "models");
+}
+
+// ---- provider keys + stacks (control plane; key values never cross the wire) ----
+
+export function fetchKeys(): Promise<KeyStatus> {
+  return getJson<KeyStatus>("/api/keys", "keys");
+}
+
+export function saveKey(provider: string, apiKey: string, baseUrl?: string): Promise<KeyStatus> {
+  return postJson<KeyStatus>("/api/keys", { provider, api_key: apiKey, base_url: baseUrl }, "keys");
+}
+
+export function fetchProviderModels(provider: string): Promise<ProviderModels> {
+  return getJson<ProviderModels>(`/api/provider_models?provider=${encodeURIComponent(provider)}`, "provider_models");
+}
+
+export function validateProvider(provider: string): Promise<ValidateResult> {
+  return postJson<ValidateResult>("/api/validate", { provider }, "validate");
+}
+
+export function fetchStacks(): Promise<StackInfo[]> {
+  return getJson<{ stacks: StackInfo[] }>("/api/stacks", "stacks").then((d) => d.stacks ?? []);
+}
+
+export function saveStack(name: string, config: Partial<ModelConfig>): Promise<{ saved: ModelConfig; stacks: StackInfo[] }> {
+  return postJson("/api/stacks", { name, config }, "save stack");
+}
+
+export function loadStack(name: string): Promise<ModelConfig> {
+  return postJson<ModelConfig>("/api/stacks/load", { name }, "load stack");
+}
+
+export function duplicateStack(name: string, newName: string): Promise<{ saved: ModelConfig; stacks: StackInfo[] }> {
+  return postJson("/api/stacks/duplicate", { name, new_name: newName }, "duplicate stack");
 }
 
 export function fetchAgents(): Promise<RunStatus> {
