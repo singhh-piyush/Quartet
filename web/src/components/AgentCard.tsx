@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { AgentState, Role } from "../types";
-import { ACTIVE_PHASES, fmtInt, phaseLabel, roleMeta } from "../theme";
+import { fmtInt, phaseLabel, roleMeta } from "../theme";
 
 export function shortModel(model: string): string {
   if (!model || model === "local-model") return model || "";
@@ -8,81 +8,40 @@ export function shortModel(model: string): string {
   return tail.replace(/-Instruct$/i, "").replace(/-Turbo$/i, "");
 }
 
-// The handoff light IS the card's own border. `.flow-ring` is a child masked to a 1px conic-gradient ring
-// at inset:0 with border-radius:inherit, so it traces THIS card's real outline (no second border, no
-// measurement). `sweep` runs one eased lap on a handoff; `loop` circles continuously while the agent
-// thinks. Driven purely by CSS so it never stutters. AgentRail sets the mode/colour/delay.
-export interface RingState {
-  mode: "sweep" | "loop";
-  color: string;
-  delay: number;
-  key: string;
-}
-
+// A compact station. The circling glow is NOT drawn here: AgentRail renders a thin rounded-rect ring
+// (`.flow-ring`) that hugs this card's outline, and its masked-out centre keeps this card's text clear.
+// `current` pulses the status dot for the agent the work currently rests on.
 export interface AgentNodeProps {
   role: Role;
   state: AgentState;
-  active: boolean;
-  thinking?: boolean;
-  ring?: RingState | null;
+  current?: boolean;
   onSelect?: () => void;
   selected?: boolean;
 }
 
-// A compact station on the signal path. `active` is gated on the handoff ARRIVING (litRole), not the raw
-// activeRole, so a card only ignites once the transfer reaches it. `thinking` intensifies the steady glow
-// while the agent works; the circling ring is the `.flow-ring` child driven by `ring`.
-export function AgentCard({
-  role,
-  state,
-  active,
-  thinking = false,
-  ring = null,
-  onSelect,
-  selected = false,
-}: AgentNodeProps) {
+export function AgentCard({ role, state, current = false, onSelect, selected = false }: AgentNodeProps) {
   const meta = roleMeta[role];
   const live = state.connected;
-  const pulsing = active && ACTIVE_PHASES.has(state.phase);
-  const border = active
-    ? meta.color
-    : selected
-      ? `${meta.color}88`
-      : live
-        ? "var(--line)"
-        : "rgba(255,255,255,0.08)";
+  const border = selected ? `${meta.color}88` : live ? "var(--line)" : "rgba(255,255,255,0.08)";
 
   return (
     <div
       onClick={onSelect}
-      className={`relative flex min-h-[96px] flex-col rounded-lg border bg-[var(--panel)] px-3.5 py-3 transition-all duration-500 ease-spring ${
+      className={`relative flex min-h-[96px] flex-col rounded-lg border bg-[var(--panel)] px-3.5 py-3 transition-all duration-300 ease-spring ${
         onSelect ? "cursor-pointer" : ""
       }`}
       style={{
         borderColor: border,
-        boxShadow: active
-          ? `0 0 0 1px ${meta.color}, 0 0 ${thinking ? 34 : 24}px -6px ${meta.color}${thinking ? "99" : "66"}, var(--elevate)`
-          : selected
-            ? `0 0 0 1px ${meta.color}44, var(--elevate)`
-            : "var(--elevate)",
+        boxShadow: selected ? `0 0 0 1px ${meta.color}44, var(--elevate)` : "var(--elevate)",
         opacity: live ? 1 : 0.45,
       }}
     >
-      {ring && (
-        <span
-          key={ring.key}
-          aria-hidden
-          className={`flow-ring ${ring.mode === "loop" ? "flow-loop" : "flow-sweep"}`}
-          style={{ "--flow-color": ring.color, "--flow-delay": `${ring.delay}ms` } as CSSProperties}
-        />
-      )}
-
       <div className="flex items-center justify-between">
         <span className="font-display text-[17px] font-semibold leading-none" style={{ color: meta.color }}>
           {meta.label}
         </span>
         <span
-          className={`h-2 w-2 rounded-full ${pulsing ? "animate-pulseRing" : ""}`}
+          className={`h-2 w-2 rounded-full ${current ? "animate-pulseRing" : ""}`}
           style={{ background: live ? meta.color : "#3f3f46", "--ring": `${meta.color}66` } as CSSProperties}
         />
       </div>

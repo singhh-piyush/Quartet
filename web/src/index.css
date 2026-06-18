@@ -77,136 +77,90 @@ body::after {
   box-shadow: var(--elevate);
 }
 
-/* The handoff light IS each card's OWN border, not a redrawn overlay. `.flow-ring` is a child of every
-   AgentCard, inset:0 with border-radius:inherit, masked to a 1px conic-gradient ring so it traces that
-   exact card outline. `--flow-angle` (a registered @property so it interpolates) rotates the bright arc:
-   `.flow-sweep` runs one eased lap on a handoff, `.flow-loop` circles continuously while the agent thinks.
-   The connector gap shows a travelling `.flow-pulse` dot. All CSS-driven (no per-frame JS, no SVG filter)
-   so it is smooth, and disabled under prefers-reduced-motion. */
-
-@property --flow-angle {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
-}
+/* The agent rail shows the glow on whichever agent is working, and hands it off to the next on a handoff,
+   driven by the flow conductor (a single rAF in AgentRail.tsx that writes opacity / CSS vars straight to the
+   elements). The circling glow (`.flow-ring`) IS the card's own rounded-rect border: a conic-gradient masked
+   to a thin rounded-rect band (`mask-composite: exclude`, the standard gradient-border recipe) so it hugs the
+   card's `rounded-lg` outline, and the masked-out centre keeps the card text clear. A bright arc rides that
+   band and circles it by animating the `@property --angle` sweep (smooth, no box rotation). The conductor only
+   toggles its opacity (active card) and `--flow-color`. A handoff fades the source ring out, fills the
+   connector across (`.flow-conn`, `--progress`), and fades the destination ring in. Disabled under
+   prefers-reduced-motion (static even outline). */
 
 .flow-ring {
   position: absolute;
-  inset: 0;
-  z-index: 1;
-  border-radius: inherit;
-  padding: 1.5px; /* ring thickness; sits right on the card's 1px border */
+  inset: -2px; /* sit just outside the card's border box */
+  z-index: 2; /* render ABOVE the card so the glowing outline shows (it is only a thin masked band) */
+  border-radius: 10px; /* card rounded-lg(8px) + 2px inset, stays concentric with the outline */
+  padding: 2px; /* thickness of the visible ring band */
   pointer-events: none;
-  opacity: 0;
+  opacity: 0; /* conductor drives this; cross-fades via the transition below */
+  transition: opacity 220ms linear;
+  /* a bright arc whose position around the ring is the animated --angle */
   background: conic-gradient(
-    from var(--flow-angle),
+    from var(--angle, 0deg),
     transparent 0deg,
     var(--flow-color, #fff) 55deg,
     transparent 130deg
   );
-  /* show the gradient only in the 1.5px padding band -> a ring that follows the rounded corners */
+  /* mask to just the padding band -> only the rounded-rect outline shows, centre stays clear */
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
+  /* soften the band into a glow that bleeds outward from the outline */
+  filter: blur(2px) drop-shadow(0 0 5px var(--flow-color, #fff));
+  animation: flowSpin 4600ms linear infinite; /* slow, smooth circling of the arc */
 }
 
-.flow-sweep {
-  animation: flowSweep 900ms cubic-bezier(0.4, 0, 0.2, 1) var(--flow-delay, 0ms) both;
+@property --angle {
+  syntax: "<angle>";
+  initial-value: 0deg;
+  inherits: false;
 }
 
-.flow-loop {
-  opacity: 1;
-  animation: flowLoop 2600ms linear infinite;
-}
-
-@keyframes flowSweep {
-  0% {
-    --flow-angle: 0deg;
-    opacity: 0;
-  }
-  18% {
-    opacity: 1;
-  }
-  82% {
-    opacity: 1;
-  }
-  100% {
-    --flow-angle: 360deg;
-    opacity: 0;
+@keyframes flowSpin {
+  to {
+    --angle: 360deg;
   }
 }
 
-@keyframes flowLoop {
-  0% {
-    --flow-angle: 0deg;
-  }
-  100% {
-    --flow-angle: 360deg;
-  }
-}
-
-/* connector gap pulse: a small dot crossing the hairline, source-colour core fading to destination */
-.flow-pulse {
+/* connector handoff: a short bright comet streak TRAVELS across the gap, so the light reads as one continuous
+   moving thing rather than a line being drawn. It is full-size from the instant it launches (unlike a scaleX
+   fill, which is near-zero early and reads as a separate "line drawing in" beat after the ring fades).
+   `--progress` (0..1) is its position across the gap: it launches centred on the source card edge and slides
+   to the destination card edge, overshooting slightly so it connects to both rings. `--pf`/`--pt` are the
+   source/destination colours (tail -> head); the glow is a box-shadow. */
+.flow-conn {
   position: absolute;
   top: 50%;
-  margin-top: -3px;
-  height: 6px;
-  width: 6px;
+  left: 0;
+  width: 16px;
+  height: 3px;
+  margin-top: -1.5px;
   border-radius: 9999px;
+  pointer-events: none;
   opacity: 0;
-  background: radial-gradient(circle, var(--pt, #fff) 0%, var(--pf, #fff) 65%, transparent 100%);
-  box-shadow: 0 0 8px 1px var(--pt, #fff);
-  animation: flowPulse 760ms cubic-bezier(0.4, 0, 0.2, 1) var(--flow-delay, 0ms) both;
+  background: linear-gradient(to right, var(--pf, #fff), var(--pt, #fff));
+  box-shadow: 0 0 12px 3px var(--pt, #fff);
+  /* travel across the gap on the compositor (no per-frame layout): centre goes 0 -> 32px (the w-8 connector
+     width); the -8px centres the 16px streak so it overshoots into both cards. Keep 32px in sync with w-8. */
+  transform: translateX(calc(var(--progress, 0) * 32px - 8px));
+  transition: opacity 170ms linear;
 }
 
-.flow-pulse-rev {
-  animation-name: flowPulseRev;
-}
-
-@keyframes flowPulse {
-  0% {
-    left: -3px;
-    opacity: 0;
-  }
-  18% {
-    opacity: 1;
-  }
-  82% {
-    opacity: 1;
-  }
-  100% {
-    left: calc(100% - 3px);
-    opacity: 0;
-  }
-}
-
-@keyframes flowPulseRev {
-  0% {
-    left: calc(100% - 3px);
-    opacity: 0;
-  }
-  18% {
-    opacity: 1;
-  }
-  82% {
-    opacity: 1;
-  }
-  100% {
-    left: -3px;
-    opacity: 0;
-  }
+.flow-conn[data-dir="rev"] {
+  background: linear-gradient(to left, var(--pf, #fff), var(--pt, #fff));
+  transform: translateX(calc((1 - var(--progress, 0)) * 32px - 8px)); /* repair bounce: travel right -> left */
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .flow-sweep,
-  .flow-loop {
+  .flow-ring {
     animation: none;
-    opacity: 0.85;
+    transition: none;
+    background: var(--flow-color, #fff); /* even outline, no circling arc */
   }
-  .flow-pulse {
-    animation: none;
-    opacity: 0;
+  .flow-conn {
+    display: none;
   }
 }
 
