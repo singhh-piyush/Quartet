@@ -1,6 +1,5 @@
 import { useState } from "react";
-import type { ModelConfig, ModelSlot, RunStatus } from "../types";
-import { StackBuilder } from "./StackBuilder";
+import type { RunStatus } from "../types";
 
 const TASKS = [
   "HumanEval/0",
@@ -30,29 +29,20 @@ function statusTone(status: string): { label: string; color: string; pulse: bool
   }
 }
 
+// Live race controls: pick a HumanEval problem and run the quartet against one large model. Model and key
+// selection live in the header drawers (Stack / Keys), so this stays a focused composer.
 export function LiveConsole({
   status,
-  models,
-  saving,
-  onUpdate,
-  onPatchMany,
-  onReloadModels,
   onRun,
   onStop,
   onReplay,
 }: {
   status: RunStatus;
-  models: ModelConfig | null;
-  saving: boolean;
-  onUpdate: (target: string, patch: Partial<ModelSlot>) => void;
-  onPatchMany: (patch: Partial<ModelConfig>) => void;
-  onReloadModels: () => void;
   onRun: (taskId: string) => void;
   onStop: () => void;
   onReplay: () => void;
 }) {
   const [task, setTask] = useState(TASKS[0]);
-  const [showModels, setShowModels] = useState(false);
   const active = status.active || status.status === "starting";
   const tone = statusTone(status.status);
 
@@ -60,10 +50,7 @@ export function LiveConsole({
     <div className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
       <div className="flex flex-wrap items-center gap-3">
         <span className="flex items-center gap-2">
-          <span
-            className={`h-2.5 w-2.5 rounded-full ${tone.pulse ? "animate-blip" : ""}`}
-            style={{ background: tone.color }}
-          />
+          <span className={`h-2.5 w-2.5 rounded-full ${tone.pulse ? "animate-blip" : ""}`} style={{ background: tone.color }} />
           <span className="font-mono text-[12px] uppercase tracking-widest" style={{ color: tone.color }}>
             {tone.label}
           </span>
@@ -103,22 +90,12 @@ export function LiveConsole({
           </button>
         )}
 
-        <div className="ml-auto flex items-center gap-3">
-          <button
-            onClick={() => setShowModels((s) => !s)}
-            className={`rounded-lg border px-3 py-1.5 font-sans text-sm font-semibold transition-colors ${
-              showModels ? "border-[var(--line-strong)] text-white" : "border-[var(--line)] text-[var(--text-2)] hover:text-white"
-            }`}
-          >
-            Stacks
-          </button>
-          <button
-            onClick={onReplay}
-            className="font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)] underline-offset-4 hover:text-[var(--text-2)] hover:underline"
-          >
-            view recorded
-          </button>
-        </div>
+        <button
+          onClick={onReplay}
+          className="ml-auto font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)] underline-offset-4 hover:text-[var(--text-2)] hover:underline"
+        >
+          view recorded
+        </button>
       </div>
 
       {status.warnings && status.warnings.length > 0 && (
@@ -134,19 +111,6 @@ export function LiveConsole({
       {status.status === "error" && status.error && (
         <div className="mt-3 rounded-md border border-fail/40 bg-fail/10 px-3 py-1.5 font-mono text-[12px] text-fail">
           {status.error}
-        </div>
-      )}
-
-      {showModels && (
-        <div className="mt-3">
-          <StackBuilder
-            models={models}
-            status={status}
-            saving={saving}
-            onUpdate={onUpdate}
-            onPatchMany={onPatchMany}
-            onReloadModels={onReloadModels}
-          />
         </div>
       )}
     </div>

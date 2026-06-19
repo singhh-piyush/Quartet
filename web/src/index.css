@@ -172,20 +172,124 @@ body::after {
   font-family: var(--font-mono);
 }
 
-/* Smooth page-transition animation for view switching */
+/* Quartet-tinted gradient text for the landing headline accent. */
+.text-gradient {
+  background: linear-gradient(100deg, var(--spec), var(--coder) 45%, var(--repairer));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Smooth page-transition animation for view switching. The wrapper is keyed on the active view so it
+   remounts and replays this every time, in either direction (the requested smooth slide-up). */
 .view-enter {
-  animation: viewFadeUp 0.75s var(--ease-spring) both;
+  animation: viewFadeUp 0.55s var(--ease-spring) both;
 }
 
 @keyframes viewFadeUp {
   0% {
     opacity: 0;
-    transform: translateY(16px) scale(0.995);
+    transform: translateY(18px) scale(0.995);
   }
 
   100% {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+/* Staggered entrance: set style={{ "--i": index }} on each child and it eases up + fades in with a
+   delay scaled by its index. Used on the landing hero, agent rail, panels, and result rows. */
+.reveal {
+  opacity: 0;
+  animation: revealUp 0.7s var(--ease-spring) both;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+
+@keyframes revealUp {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Landing atmosphere: a soft, slow-breathing radial glow tinted by the four agent colours, behind the
+   hero, so the pure-black page has depth instead of a flat void. */
+.landing-aura {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 48% at 50% -5%, rgba(56, 189, 248, 0.12), transparent 70%),
+    radial-gradient(42% 40% at 86% 16%, rgba(167, 139, 250, 0.11), transparent 70%),
+    radial-gradient(44% 42% at 10% 26%, rgba(52, 211, 153, 0.09), transparent 70%),
+    radial-gradient(40% 38% at 70% 80%, rgba(251, 191, 36, 0.06), transparent 70%);
+  animation: auraBreathe 13s ease-in-out infinite;
+}
+
+@keyframes auraBreathe {
+  0%,
+  100% {
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Slow conic shimmer on the landing wordmark underline + step connectors. */
+@keyframes lineSweep {
+  0% {
+    background-position: -140% 0;
+  }
+  100% {
+    background-position: 240% 0;
+  }
+}
+
+/* Slide-over drawer + its backdrop (pop-up config panels). */
+.drawer-backdrop {
+  animation: backdropIn 0.25s var(--ease-smooth) both;
+}
+
+@keyframes backdropIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.drawer-panel {
+  animation: drawerIn 0.34s var(--ease-spring) both;
+}
+
+@keyframes drawerIn {
+  0% {
+    transform: translateX(102%);
+  }
+  100% {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .view-enter,
+  .landing-aura,
+  .drawer-backdrop,
+  .drawer-panel {
+    animation: none;
+    opacity: 1;
+  }
+  .drawer-panel {
+    transform: none;
   }
 }
 

@@ -16,40 +16,58 @@ import json
 import os
 from pathlib import Path
 
-from orchestrator.config import _AIML_DEFAULTS, LOCAL_MODEL
+from orchestrator.config import _PROVIDER_DEFAULTS, LOCAL_MODEL
 
 _PATH = Path(__file__).resolve().parent / "run_config.json"
 ROLES = ["spec", "coder", "tester", "repairer"]
 
-# Display/label model names for the default two-server local topology. These drive the UI agent-card
-# labels and the race lane (via models_map); for a local llama-server the name is otherwise cosmetic
-# (the server serves whatever GGUF it loaded). The agents run a small coder model (:8081); the large
-# competitor is Qwen3.6 (:8080). Override with AGENTS_MODEL / LARGE_MODEL.
+# Cloud-first default topology: the four agents and the large competitor run on Groq so the app works on
+# a fresh deploy with only a Groq key (or the server's shared key), no local model servers required.
+# `local` stays fully selectable per role from the dashboard for a user who wants to run their own model.
+# Override the seed with LLM_PROVIDER / {ROLE}_MODEL / LARGE_PROVIDER / LARGE_MODEL.
+_DEFAULT_PROVIDER = os.environ.get("LLM_PROVIDER", "groq")
+_DEFAULT_LARGE_PROVIDER = os.environ.get("LARGE_PROVIDER", "groq")
+
+# Display/label model name for a slot left on the LOCAL provider (a local llama-server ignores the name;
+# it serves whatever GGUF it loaded). The race lane + agent-card labels read from models_map.
 _AGENTS_MODEL_DEFAULT = os.environ.get("AGENTS_MODEL", "WhiteRabbitNeo-2.5-Qwen-2.5-Coder-7B")
-_LARGE_MODEL_DEFAULT = os.environ.get("LARGE_MODEL", "Qwen3.6-35B-A3B")
+
+# Per-provider default large competitor: a genuinely larger single model for the race (4 small vs 1
+# large). Override with LARGE_MODEL.
+_LARGE_MODEL_BY_PROVIDER = {
+    "groq": "llama-3.3-70b-versatile",
+    "openrouter": "meta-llama/llama-3.3-70b-instruct",
+    "gemini": "gemini-2.5-pro",
+    "aimlapi": "gpt-4o",
+    "local": os.environ.get("LARGE_MODEL", "Qwen3.6-35B-A3B"),
+}
 
 
 def _default_agent(role: str, provider: str) -> dict:
     env_model = os.environ.get(f"{role.upper()}_MODEL")
     if env_model:
         model = env_model
-    elif provider == "aimlapi":
-        model = _AIML_DEFAULTS.get(role, LOCAL_MODEL)
-    else:
+    elif provider in _PROVIDER_DEFAULTS:
+        model = _PROVIDER_DEFAULTS[provider].get(role, _AGENTS_MODEL_DEFAULT)
+    else:  # local / openai_compatible: name is cosmetic
         model = _AGENTS_MODEL_DEFAULT
     return {"provider": provider, "model": model}
 
 
+def _default_large() -> dict:
+    provider = _DEFAULT_LARGE_PROVIDER
+    model = os.environ.get("LARGE_MODEL") or _LARGE_MODEL_BY_PROVIDER.get(provider, _AGENTS_MODEL_DEFAULT)
+    return {"provider": provider, "model": model}
+
+
 def defaults() -> dict:
-    """Seed config from the environment (LLM_PROVIDER + *_MODEL); large competitor runs local."""
-    provider = os.environ.get("LLM_PROVIDER", "local")
+    """Cloud-first seed (Groq by default). Env overrides LLM_PROVIDER / {ROLE}_MODEL / LARGE_* still win,
+    and any slot can be switched to `local` (or another provider) from the dashboard."""
+    provider = _DEFAULT_PROVIDER
     return {
         "name": "default",
         "agents": {role: _default_agent(role, provider) for role in ROLES},
-        "large": {
-            "provider": "local",
-            "model": _LARGE_MODEL_DEFAULT,
-        },
+        "large": _default_large(),
     }
 
 

@@ -147,8 +147,10 @@ export interface StackInfo {
 }
 
 // Per-provider key presence (booleans + the non-secret openai_compatible base_url). Never a key value.
+// `shared` is true when the only key is the server's shared default (no BYO/env key), so the UI can label
+// runs as using the rate-limited shared key and invite the user to add their own.
 export interface KeyStatus {
-  [provider: string]: { has_key: boolean; base_url?: string };
+  [provider: string]: { has_key: boolean; shared?: boolean; base_url?: string };
 }
 
 export interface ProviderModels {

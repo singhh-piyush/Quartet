@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { getApiToken, setApiToken } from "../api";
 import type { ModelConfig, ModelSlot, Role, RunStatus } from "../types";
 import { useLiveRun } from "../useLiveRun";
 import { useProject } from "../useProject";
@@ -7,8 +6,6 @@ import { useTranscript } from "../useTranscript";
 import { AgentRail } from "./AgentRail";
 import { BandRoom } from "./BandRoom";
 import { OutputPanel } from "./OutputPanel";
-import { SecretInput } from "./SecretInput";
-import { StackBuilder } from "./StackBuilder";
 
 const TYPES = [
   { key: "auto", label: "Auto" },
@@ -33,32 +30,25 @@ function statusTone(status: string): { label: string; color: string; pulse: bool
   }
 }
 
-// The build workspace: describe a small project, pick a stack, and watch the quartet build it live.
-// Left is the live reasoning thread (the centerpiece), right is the produced project.
+// The build workspace: the conversation (left) and the produced files/code (right) are the centerpiece,
+// with a chat-style composer docked at the bottom. Models and keys are configured from the header
+// drawers, so this view stays focused on the work.
 export function BuildView({
   status,
   models,
-  saving,
   onUpdate,
-  onPatchMany,
-  onReloadModels,
   startBuild,
   stop,
 }: {
   status: RunStatus;
   models: ModelConfig | null;
-  saving: boolean;
   onUpdate: (target: string, patch: Partial<ModelSlot>) => void;
-  onPatchMany: (patch: Partial<ModelConfig>) => void;
-  onReloadModels: () => void;
   startBuild: (description: string, projectType: string) => Promise<RunStatus>;
   stop: () => void;
 }) {
   const [description, setDescription] = useState("");
   const [projectType, setProjectType] = useState<string>("auto");
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
-  const [showStack, setShowStack] = useState(false);
-  const [token, setToken] = useState(getApiToken());
   const [focus, setFocus] = useState<Role | null>(null);
 
   const live = useLiveRun(liveRunId);
@@ -92,21 +82,42 @@ export function BuildView({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3.5">
-      {/* controls */}
-      <div className="shrink-0 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-4">
-        <div className="flex items-start gap-3">
+      <div className="shrink-0">
+        <AgentRail room={live.room} focus={focus} onFocus={(r) => setFocus((f) => (f === r ? null : r))} />
+      </div>
+
+      {live.error && (
+        <div className="shrink-0 rounded-lg border border-fail/40 bg-fail/10 px-4 py-2 font-mono text-sm text-fail">{live.error}</div>
+      )}
+
+      {/* conversation + produced files/code */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3.5 lg:grid-cols-[1.4fr_1fr]">
+        <div className="min-h-[42vh] lg:min-h-0">
+          <BandRoom transcript={transcript} room={live.room} live={true} focus={focus} />
+        </div>
+        <div className="min-h-[42vh] lg:min-h-0">
+          <OutputPanel project={project} runId={liveRunId} />
+        </div>
+      </div>
+
+      {/* composer (docked at the bottom, chat style) */}
+      <div className="shrink-0 rounded-xl border border-[var(--line)] bg-[var(--panel)] p-3.5">
+        <div className="flex items-end gap-3">
           <textarea
             value={description}
             disabled={active}
             onChange={(e) => setDescription(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onBuild();
+            }}
             placeholder="Describe a small project to build. e.g. a Python module that parses a CSV and prints column stats, or a static landing page with a contact form."
             rows={2}
-            className="min-h-0 flex-1 resize-y rounded-md border border-[var(--line)] bg-black/60 px-3 py-2 font-sans text-[13.5px] text-[var(--text)] outline-none focus:border-[var(--line-strong)] disabled:opacity-50"
+            className="min-h-0 flex-1 resize-y rounded-lg border border-[var(--line)] bg-black/60 px-3 py-2 font-sans text-[13.5px] text-[var(--text)] outline-none focus:border-[var(--line-strong)] disabled:opacity-50"
           />
           {active ? (
             <button
               onClick={stop}
-              className="shrink-0 rounded-lg border border-fail/50 bg-fail/10 px-4 py-2 font-sans text-sm font-semibold text-fail transition-colors hover:bg-fail/20"
+              className="shrink-0 rounded-lg border border-fail/50 bg-fail/10 px-4 py-2.5 font-sans text-sm font-semibold text-fail transition-colors hover:bg-fail/20"
             >
               Stop
             </button>
@@ -114,7 +125,7 @@ export function BuildView({
             <button
               onClick={onBuild}
               disabled={!description.trim()}
-              className="shrink-0 rounded-lg bg-repairer px-5 py-2 font-sans text-sm font-semibold text-black shadow-[0_0_24px_-8px_var(--repairer)] transition-transform hover:scale-[1.02] disabled:opacity-40"
+              className="shrink-0 rounded-lg bg-repairer px-5 py-2.5 font-sans text-sm font-semibold text-black shadow-[0_0_24px_-8px_var(--repairer)] transition-transform hover:scale-[1.02] disabled:opacity-40"
             >
               Build
             </button>
@@ -147,28 +158,7 @@ export function BuildView({
             ))}
           </div>
 
-          <div className="ml-auto flex items-center gap-3">
-            <label className="flex items-center gap-1.5" title="Required only when driving a remote demo server over a tunnel">
-              <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--text-3)]">token</span>
-              <SecretInput
-                value={token}
-                onChange={(v) => {
-                  setToken(v);
-                  setApiToken(v);
-                }}
-                placeholder="tunnel"
-                className="w-32"
-              />
-            </label>
-            <button
-              onClick={() => setShowStack((s) => !s)}
-              className={`rounded-lg border px-3 py-1.5 font-sans text-sm font-semibold transition-colors ${
-                showStack ? "border-[var(--line-strong)] text-white" : "border-[var(--line)] text-[var(--text-2)] hover:text-white"
-              }`}
-            >
-              Stack
-            </button>
-          </div>
+          <span className="ml-auto hidden font-mono text-[11px] text-[var(--text-3)] lg:block">cmd/ctrl + enter to build</span>
         </div>
 
         {status.warnings && status.warnings.length > 0 && (
@@ -185,37 +175,6 @@ export function BuildView({
             {status.error}
           </div>
         )}
-        {showStack && (
-          <div className="mt-3">
-            <StackBuilder
-              models={models}
-              status={status}
-              saving={saving}
-              onUpdate={onUpdate}
-              onPatchMany={onPatchMany}
-              onReloadModels={onReloadModels}
-            />
-          </div>
-        )}
-      </div>
-
-      {live.error && (
-        <div className="shrink-0 rounded-lg border border-fail/40 bg-fail/10 px-4 py-2 font-mono text-sm text-fail">
-          {live.error}
-        </div>
-      )}
-
-      <div className="shrink-0">
-        <AgentRail room={live.room} focus={focus} onFocus={(r) => setFocus((f) => (f === r ? null : r))} />
-      </div>
-
-      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3.5 lg:grid-cols-[1.4fr_1fr]">
-        <div className="min-h-[55vh] lg:min-h-0">
-          <BandRoom transcript={transcript} room={live.room} live={true} focus={focus} />
-        </div>
-        <div className="min-h-[55vh] lg:min-h-0">
-          <OutputPanel project={project} runId={liveRunId} />
-        </div>
       </div>
     </div>
   );

@@ -3,21 +3,28 @@ import { fetchRuns } from "./api";
 import { BuildView } from "./components/BuildView";
 import { CompareView } from "./components/CompareView";
 import { Controls } from "./components/Controls";
+import { Drawer } from "./components/Drawer";
+import { Glyph } from "./components/Glyph";
+import { KeyPanel } from "./components/KeyPanel";
 import { LabView } from "./components/LabView";
 import { LiveConsole } from "./components/LiveConsole";
+import { PricingTable } from "./components/PricingTable";
 import { ResultsView } from "./components/ResultsView";
 import { RoomView } from "./components/RoomView";
-import { roleMeta, signalOrder } from "./theme";
-import type { RunInfo } from "./types";
+import { StackBuilder } from "./components/StackBuilder";
+import type { RunInfo, RunStatus } from "./types";
+import { useLab } from "./useLab";
 import { useLiveRun } from "./useLiveRun";
 import { useModels } from "./useModels";
 import { usePlayer } from "./usePlayer";
+import type { Route } from "./useRoute";
 import { useRunStatus } from "./useRunStatus";
 import { useTranscript } from "./useTranscript";
 
 type View = "build" | "race" | "lab";
-// The Race tab now also hosts Results and Compare (moved here to declutter the top nav).
+// The Race tab hosts Live and Replay plus the Results and Compare reports (kept here to keep the top nav small).
 type RaceTab = "live" | "replay" | "results" | "compare";
+type DrawerId = "stack" | "keys" | "pricing" | null;
 
 const TABS: { key: View; label: string }[] = [
   { key: "build", label: "Build" },
@@ -32,13 +39,20 @@ const RACE_TABS: { key: RaceTab; label: string }[] = [
   { key: "compare", label: "Compare" },
 ];
 
-export default function App() {
-  const [view, setView] = useState<View>("build");
-  const [raceTab, setRaceTab] = useState<RaceTab>("live");
+export default function App({ route }: { route: Route }) {
+  const q = route.query;
+  // Deep links: /app?view=build|race|lab and the landing "watch demo" /app?mode=replay&run=demo-golden.
+  const [view, setView] = useState<View>(() => {
+    if (q.get("mode") === "replay") return "race";
+    const v = q.get("view");
+    return v === "race" || v === "lab" ? v : "build";
+  });
+  const [raceTab, setRaceTab] = useState<RaceTab>(() => (q.get("mode") === "replay" ? "replay" : "live"));
+  const [replayRunId, setReplayRunId] = useState<string>(() => q.get("run") || "demo-golden");
   const [runs, setRuns] = useState<RunInfo[]>([]);
-  const [replayRunId, setReplayRunId] = useState<string>("demo-golden");
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [speed, setSpeed] = useState<number>(1);
+  const [drawer, setDrawer] = useState<DrawerId>(null);
 
   useEffect(() => {
     fetchRuns()
@@ -51,12 +65,12 @@ export default function App() {
   const liveActive = view === "race" && raceTab === "live";
   const live = useLiveRun(liveActive ? liveRunId : null);
   const { models, saving, update, patchMany, reload: reloadModels } = useModels();
+  const lab = useLab();
 
   const isRoom = raceTab === "live" || raceTab === "replay";
   const room = raceTab === "replay" ? player.room : live.room;
   const transcriptRunId = raceTab === "replay" ? replayRunId : liveRunId;
   const transcriptDone = raceTab === "replay" ? player.cursor >= player.total : live.done;
-  // While a live run streams, poll the transcript so reasoning fills in as agents speak.
   const pollTranscript = liveActive && !!liveRunId && !live.done;
   const { transcript } = useTranscript(transcriptRunId, transcriptDone, pollTranscript);
 
@@ -73,71 +87,36 @@ export default function App() {
     raceTab === "replay" ? (
       <Controls player={player} runs={runs} runId={replayRunId} setRunId={setReplayRunId} />
     ) : (
-      <LiveConsole
-        status={status}
-        models={models}
-        saving={saving}
-        onUpdate={update}
-        onPatchMany={patchMany}
-        onReloadModels={reloadModels}
-        onRun={onRun}
-        onStop={stop}
-        onReplay={() => setRaceTab("replay")}
-      />
+      <LiveConsole status={status} onRun={onRun} onStop={stop} onReplay={() => setRaceTab("replay")} />
     );
 
-  const statusLabel =
-    view === "build"
-      ? status.mode === "build" && (status.active || status.status === "starting")
-        ? "building"
-        : status.mode === "build" && status.status === "done"
-          ? "complete"
-          : "ready"
-      : view === "lab"
-        ? status.mode === "lab" && (status.active || status.status === "starting")
-          ? "benchmarking"
-          : status.mode === "lab" && status.status === "done"
-            ? "complete"
-            : "ready"
-        : raceTab === "results" || raceTab === "compare"
-          ? "results"
-          : raceTab === "replay"
-            ? player.playing
-              ? "replaying"
-              : "recorded"
-            : status.active || status.status === "starting"
-              ? "running live"
-              : live.done
-                ? "complete"
-                : "ready";
+  const statusLabel = computeStatusLabel(view, raceTab, status, live.done, player.playing);
 
   return (
     <div className="flex h-full flex-col overflow-hidden px-6 py-5 sm:px-8 lg:px-10">
       <header className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-4">
-        <div className="flex items-center gap-4">
+        <button onClick={() => route.navigate("/")} className="flex items-center gap-4 text-left" title="Back to landing">
           <Glyph />
           <div>
             <h1 className="font-display text-3xl font-extrabold tracking-tight text-[var(--text)]">QUARTET</h1>
-            <p className="text-[13px] text-[var(--text-2)]">
+            <p className="hidden text-[13px] text-[var(--text-2)] sm:block">
               four small models collaborate through Band, race one large model, and prove the solution
             </p>
           </div>
-        </div>
+        </button>
 
-        <div className="flex items-center gap-4">
-          <span className="hidden items-center gap-2 font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)] sm:flex">
+        <div className="flex items-center gap-3">
+          <span className="hidden items-center gap-2 font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)] md:flex">
             <span className="h-2 w-2 animate-blip rounded-full bg-repairer" />
             {statusLabel}
           </span>
-          {view === "race" && (
-            <nav className="flex items-center gap-1 rounded-xl border border-[var(--line)] bg-black/40 p-1">
-              {RACE_TABS.map((t) => (
-                <ModeButton key={t.key} active={raceTab === t.key} onClick={() => setRaceTab(t.key)}>
-                  {t.label}
-                </ModeButton>
-              ))}
-            </nav>
-          )}
+
+          <div className="flex items-center gap-1.5">
+            <PanelButton onClick={() => setDrawer("stack")}>Stack</PanelButton>
+            <PanelButton onClick={() => setDrawer("keys")}>Keys</PanelButton>
+            {view === "lab" && <PanelButton onClick={() => setDrawer("pricing")}>Pricing</PanelButton>}
+          </div>
+
           <nav className="flex items-center gap-1 rounded-xl border border-[var(--line)] bg-black/40 p-1">
             {TABS.map((t) => (
               <TabButton key={t.key} active={view === t.key} onClick={() => setView(t.key)}>
@@ -148,30 +127,22 @@ export default function App() {
         </div>
       </header>
 
+      {view === "race" && (
+        <div className="mb-3 flex shrink-0 items-center gap-1 self-start rounded-xl border border-[var(--line)] bg-black/40 p-1">
+          {RACE_TABS.map((t) => (
+            <ModeButton key={t.key} active={raceTab === t.key} onClick={() => setRaceTab(t.key)}>
+              {t.label}
+            </ModeButton>
+          ))}
+        </div>
+      )}
+
       <main className="min-h-0 flex-1">
         <div key={`${view}-${raceTab}`} className="view-enter h-full min-h-0">
           {view === "build" ? (
-            <BuildView
-              status={status}
-              models={models}
-              saving={saving}
-              onUpdate={update}
-              onPatchMany={patchMany}
-              onReloadModels={reloadModels}
-              startBuild={startBuild}
-              stop={stop}
-            />
+            <BuildView status={status} models={models} onUpdate={update} startBuild={startBuild} stop={stop} />
           ) : view === "lab" ? (
-            <LabView
-              status={status}
-              models={models}
-              saving={saving}
-              onUpdate={update}
-              onPatchMany={patchMany}
-              onReloadModels={reloadModels}
-              startLab={startLab}
-              stop={stop}
-            />
+            <LabView status={status} startLab={startLab} stop={stop} />
           ) : isRoom ? (
             <RoomView
               room={room}
@@ -189,41 +160,73 @@ export default function App() {
       </main>
 
       <footer className="mt-4 flex shrink-0 items-center justify-between border-t border-[var(--line)] pt-3 font-mono text-[12px] uppercase tracking-widest text-[var(--text-3)]">
-        <span>
-          {view === "build"
-            ? status.run_id && status.mode === "build"
-              ? `build run ${status.run_id}`
-              : "describe a project to build it live"
-            : view === "lab"
-              ? status.mode === "lab" && status.run_id
-                ? `lab run ${status.stack ?? ""} ${status.run_id}`
-                : "pick a stack and benchmark it"
-              : raceTab === "results" || raceTab === "compare"
-                ? "HumanEval benchmark configurations"
-                : raceTab === "replay"
-                  ? `replay of results/events/${replayRunId}.jsonl`
-                  : liveRunId
-                    ? `live run ${liveRunId}`
-                    : "no live run yet"}
-        </span>
+        <span>{computeFooter(view, raceTab, status, liveRunId, replayRunId)}</span>
         <span>Track 2 / multi-agent software development</span>
       </footer>
+
+      {/* Pop-up config panels (slide-over drawers), shared across every view. */}
+      <Drawer
+        open={drawer === "stack"}
+        onClose={() => setDrawer(null)}
+        title="Models and stacks"
+        subtitle="pick a provider and model per role, save a named stack"
+      >
+        <StackBuilder
+          models={models}
+          status={status}
+          saving={saving}
+          onUpdate={update}
+          onPatchMany={patchMany}
+          onReloadModels={reloadModels}
+        />
+      </Drawer>
+      <Drawer open={drawer === "keys"} onClose={() => setDrawer(null)} title="Provider keys" subtitle="session only, never stored">
+        <KeyPanel />
+      </Drawer>
+      <Drawer open={drawer === "pricing"} onClose={() => setDrawer(null)} title="Price table" subtitle="dollars per 1M tokens, drives lab cost">
+        <PricingTable pricing={lab.pricing} onUpdate={lab.updatePrice} />
+      </Drawer>
     </div>
   );
 }
 
-// Four squares in the agent accents: the quartet.
-function Glyph() {
+function computeStatusLabel(view: View, raceTab: RaceTab, status: RunStatus, liveDone: boolean, playing: boolean): string {
+  if (view === "build") {
+    if (status.mode === "build" && (status.active || status.status === "starting")) return "building";
+    if (status.mode === "build" && status.status === "done") return "complete";
+    return "ready";
+  }
+  if (view === "lab") {
+    if (status.mode === "lab" && (status.active || status.status === "starting")) return "benchmarking";
+    if (status.mode === "lab" && status.status === "done") return "complete";
+    return "ready";
+  }
+  if (raceTab === "results" || raceTab === "compare") return "results";
+  if (raceTab === "replay") return playing ? "replaying" : "recorded";
+  if (status.active || status.status === "starting") return "running live";
+  return liveDone ? "complete" : "ready";
+}
+
+function computeFooter(view: View, raceTab: RaceTab, status: RunStatus, liveRunId: string | null, replayRunId: string): string {
+  if (view === "build") {
+    return status.run_id && status.mode === "build" ? `build run ${status.run_id}` : "describe a project to build it live";
+  }
+  if (view === "lab") {
+    return status.mode === "lab" && status.run_id ? `lab run ${status.stack ?? ""} ${status.run_id}` : "pick a stack and benchmark it";
+  }
+  if (raceTab === "results" || raceTab === "compare") return "HumanEval benchmark configurations";
+  if (raceTab === "replay") return `replay of results/events/${replayRunId}.jsonl`;
+  return liveRunId ? `live run ${liveRunId}` : "no live run yet";
+}
+
+function PanelButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-2 gap-1">
-      {signalOrder.map((r) => (
-        <span
-          key={r}
-          className="h-3.5 w-3.5 rounded-[3px]"
-          style={{ background: roleMeta[r].color, boxShadow: `0 0 10px -2px ${roleMeta[r].color}` }}
-        />
-      ))}
-    </div>
+    <button
+      onClick={onClick}
+      className="rounded-lg border border-[var(--line)] bg-black/30 px-3 py-1.5 font-sans text-sm font-semibold text-[var(--text-2)] transition-colors hover:border-[var(--line-strong)] hover:text-white"
+    >
+      {children}
+    </button>
   );
 }
 

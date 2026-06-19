@@ -54,6 +54,14 @@ _FIXED_KEYED = {
     "openrouter": "OPENROUTER_API_KEY",
 }
 
+# Server-side SHARED default keys: a deploy can set these so a judge can run with no key of their own
+# (rate-limited). Resolved AFTER the provider env var and the in-memory BYO store, so a user's own key
+# always overrides the shared one. Set only the QUARTET_DEFAULT_* var on a deploy (not GROQ_API_KEY),
+# so the session BYO key wins. The value is never logged or returned to the client.
+_DEFAULT_KEY_ENV = {
+    "groq": "QUARTET_DEFAULT_GROQ_KEY",
+}
+
 # Band platform REST base for the conductor (Agent API). The SDK RestClient defaults to a dev
 # host, so the conductor passes this explicitly to share the agents' platform.
 BAND_REST_URL = os.environ.get("BAND_REST_URL", "https://app.band.ai")
@@ -146,15 +154,33 @@ def save_provider_key(provider: str, api_key: str | None = None, base_url: str |
     return key_status()
 
 
+def _key_is_shared(provider: str) -> bool:
+    """True when the only key available for this provider is the server's shared default (no provider
+    env var, no BYO key in the store). Lets the UI label runs as using the rate-limited shared key and
+    invite the user to add their own. Never exposes the key itself."""
+    default_var = _DEFAULT_KEY_ENV.get(provider)
+    if not default_var or not os.environ.get(default_var):
+        return False
+    store = _read_provider_keys().get(provider) or {}
+    env_var = _FIXED_KEYED.get(provider)
+    has_own = bool((env_var and os.environ.get(env_var)) or store.get("api_key"))
+    return not has_own
+
+
 def key_status() -> dict:
-    """Which providers have a usable secret, plus the non-secret openai_compatible base_url. Never
-    includes a key value, so it is safe to return to the client."""
+    """Which providers have a usable secret, plus the non-secret openai_compatible base_url. `shared` is
+    true when the only key is the server's shared default (no BYO/env key). Never includes a key value,
+    so it is safe to return to the client."""
     oc = provider_secret("openai_compatible")
     status = {
-        p: {"has_key": bool(provider_secret(p).get("api_key"))}
+        p: {"has_key": bool(provider_secret(p).get("api_key")), "shared": _key_is_shared(p)}
         for p in ("groq", "aimlapi", "gemini", "openrouter")
     }
-    status["openai_compatible"] = {"has_key": bool(oc.get("api_key")), "base_url": oc.get("base_url") or ""}
+    status["openai_compatible"] = {
+        "has_key": bool(oc.get("api_key")),
+        "shared": False,
+        "base_url": oc.get("base_url") or "",
+    }
     return status
 
 
@@ -172,7 +198,13 @@ def provider_secret(provider: str) -> dict:
         key = aimlapi_key()
         return {"api_key": key} if key else {}
     if provider in _FIXED_KEYED:
-        key = os.environ.get(_FIXED_KEYED[provider]) or store.get("api_key")
+        # provider env var -> BYO store -> server shared default (so a user's own key always wins).
+        default_var = _DEFAULT_KEY_ENV.get(provider)
+        key = (
+            os.environ.get(_FIXED_KEYED[provider])
+            or store.get("api_key")
+            or (os.environ.get(default_var) if default_var else None)
+        )
         return {"api_key": key} if key else {}
     if provider == "openai_compatible":
         out = {}

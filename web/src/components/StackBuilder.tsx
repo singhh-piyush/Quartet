@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { roleMeta } from "../theme";
 import { KEYED_PROVIDERS, PROVIDERS } from "../types";
-import type { ModelConfig, ModelSlot, RunStatus, ValidateResult } from "../types";
+import type { ModelConfig, ModelSlot, RunStatus } from "../types";
 import { useStacks } from "../useStacks";
 import { ModelDashboard } from "./ModelDashboard";
-import { SecretInput } from "./SecretInput";
+import { ProviderKeyRow } from "./ProviderKeyRow";
 
 const ROLES = ["spec", "coder", "tester", "repairer"] as const;
 
@@ -342,103 +342,6 @@ function ModelRow({
         className="min-w-0 flex-1 rounded-md border border-[var(--line)] bg-black/60 px-2.5 py-1.5 font-mono text-[12.5px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
         placeholder={options[0] ?? "model id"}
       />
-    </div>
-  );
-}
-
-// One row per keyed provider used by the stack: paste a key (with show/hide), Save, Validate, status.
-// This is the single place keys are entered, so the advanced per-role provider mixing has one too.
-function ProviderKeyRow({
-  provider,
-  label,
-  status,
-  onSave,
-  onValidate,
-}: {
-  provider: string;
-  label: string;
-  status?: { has_key: boolean; base_url?: string };
-  onSave: (apiKey: string, baseUrl?: string) => Promise<unknown>;
-  onValidate: () => Promise<ValidateResult>;
-}) {
-  const [apiKey, setApiKey] = useState("");
-  const [baseUrl, setBaseUrl] = useState(status?.base_url ?? "");
-  const [validation, setValidation] = useState<ValidateResult | null>(null);
-  const [validating, setValidating] = useState(false);
-  const hasKey = !!status?.has_key;
-  const isOC = provider === "openai_compatible";
-
-  useEffect(() => {
-    if (isOC && status?.base_url) setBaseUrl(status.base_url);
-  }, [isOC, status?.base_url]);
-
-  const save = () => {
-    if (!apiKey.trim() && !(isOC && baseUrl.trim())) return;
-    onSave(apiKey.trim(), isOC ? baseUrl.trim() : undefined);
-    setApiKey("");
-  };
-  const validate = () => {
-    setValidating(true);
-    onValidate()
-      .then(setValidation)
-      .finally(() => setValidating(false));
-  };
-
-  return (
-    <div className="space-y-1.5">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="w-24 shrink-0 font-mono text-[11px] text-[var(--text-2)]">{label}</span>
-        {isOC && (
-          <input
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://host/v1"
-            spellCheck={false}
-            className="w-52 rounded-md border border-[var(--line)] bg-black/60 px-2.5 py-1.5 font-mono text-[12px] text-[var(--text)] outline-none focus:border-[var(--line-strong)]"
-          />
-        )}
-        <SecretInput
-          value={apiKey}
-          onChange={setApiKey}
-          onEnter={save}
-          placeholder={hasKey ? "key stored (enter to replace)" : "paste api key"}
-          className="flex-1"
-        />
-        <button
-          onClick={save}
-          className="rounded-md border border-[var(--line)] px-3 py-1.5 font-sans text-sm font-semibold text-[var(--text-2)] transition-colors hover:text-white"
-        >
-          Save
-        </button>
-        <button
-          onClick={validate}
-          disabled={validating}
-          className="rounded-md border border-[var(--line)] px-3 py-1.5 font-sans text-sm font-semibold text-[var(--text-2)] transition-colors hover:text-white disabled:opacity-40"
-        >
-          {validating ? "checking..." : "Validate"}
-        </button>
-        <span
-          className="rounded-full px-2 py-0.5 font-mono text-[10.5px]"
-          style={{
-            background: hasKey ? "rgba(52,211,153,0.12)" : "rgba(255,255,255,0.06)",
-            color: hasKey ? "var(--pass)" : "var(--text-3)",
-          }}
-        >
-          {hasKey ? "key set" : "no key"}
-        </span>
-      </div>
-      {validation && (
-        <div
-          className="rounded-md px-3 py-1.5 font-mono text-[11.5px]"
-          style={{
-            background: validation.ok ? "rgba(52,211,153,0.1)" : "rgba(248,113,113,0.1)",
-            color: validation.ok ? "var(--pass)" : "var(--fail)",
-          }}
-        >
-          {validation.ok ? "ok: " : "failed: "}
-          {validation.detail}
-        </div>
-      )}
     </div>
   );
 }

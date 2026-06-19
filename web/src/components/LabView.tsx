@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtInt, fmtPct, fmtUsd } from "../theme";
-import type { LabResult, ModelConfig, ModelSlot, Role, RunStatus } from "../types";
+import type { LabResult, Role, RunStatus } from "../types";
 import { useLab } from "../useLab";
 import { useLiveRun } from "../useLiveRun";
 import { useStacks } from "../useStacks";
 import { useTranscript } from "../useTranscript";
 import { AgentRail } from "./AgentRail";
 import { BandRoom } from "./BandRoom";
-import { PricingTable } from "./PricingTable";
-import { StackBuilder } from "./StackBuilder";
 
 const SIZES = [3, 5, 10];
 
@@ -39,30 +37,18 @@ function statusTone(status: string): { label: string; color: string; pulse: bool
 // without re-running. The single large model is an estimate (no run), always labeled.
 export function LabView({
   status,
-  models,
-  saving,
-  onUpdate,
-  onPatchMany,
-  onReloadModels,
   startLab,
   stop,
 }: {
   status: RunStatus;
-  models: ModelConfig | null;
-  saving: boolean;
-  onUpdate: (target: string, patch: Partial<ModelSlot>) => void;
-  onPatchMany: (patch: Partial<ModelConfig>) => void;
-  onReloadModels: () => void;
   startLab: (stack: string, n: number) => Promise<RunStatus>;
   stop: () => void;
 }) {
   const sx = useStacks();
-  const { results, pricing, refreshResults, updatePrice } = useLab();
+  const { results, refreshResults } = useLab();
   const [stack, setStack] = useState("");
   const [n, setN] = useState(5);
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
-  const [showStack, setShowStack] = useState(false);
-  const [showPricing, setShowPricing] = useState(false);
   const [focusStack, setFocusStack] = useState<string | null>(null);
   const [agentFocus, setAgentFocus] = useState<Role | null>(null);
 
@@ -167,14 +153,9 @@ export function LabView({
             </button>
           )}
 
-          <div className="ml-auto flex items-center gap-3">
-            <Toggle on={showStack} onClick={() => setShowStack((s) => !s)}>
-              Stack
-            </Toggle>
-            <Toggle on={showPricing} onClick={() => setShowPricing((s) => !s)}>
-              Pricing
-            </Toggle>
-          </div>
+          <span className="ml-auto font-mono text-[11px] text-[var(--text-3)]">
+            build stacks and edit pricing from the header
+          </span>
         </div>
 
         {isLab && status.warnings && status.warnings.length > 0 && (
@@ -208,23 +189,6 @@ export function LabView({
           </div>
         )}
 
-        {showStack && (
-          <div className="mt-3">
-            <StackBuilder
-              models={models}
-              status={status}
-              saving={saving}
-              onUpdate={onUpdate}
-              onPatchMany={onPatchMany}
-              onReloadModels={onReloadModels}
-            />
-          </div>
-        )}
-        {showPricing && (
-          <div className="mt-3">
-            <PricingTable pricing={pricing} onUpdate={updatePrice} />
-          </div>
-        )}
       </section>
 
       {/* live reasoning (only while a lab run streams) */}
@@ -253,19 +217,6 @@ export function LabView({
         )
       )}
     </div>
-  );
-}
-
-function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`rounded-lg border px-3 py-1.5 font-sans text-sm font-semibold transition-colors ${
-        on ? "border-[var(--line-strong)] text-white" : "border-[var(--line)] text-[var(--text-2)] hover:text-white"
-      }`}
-    >
-      {children}
-    </button>
   );
 }
 
