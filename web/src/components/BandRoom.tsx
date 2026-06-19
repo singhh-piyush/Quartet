@@ -85,8 +85,8 @@ function Message({ m, dim }: { m: TranscriptMessage; dim: boolean }) {
   return (
     <div className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[85%] flex flex-col gap-1 px-4 py-3 transition-opacity duration-300 ${
-          isUser ? "rounded-2xl rounded-br-sm text-black" : "rounded-2xl rounded-bl-sm"
+        className={`max-w-[85%] flex flex-col transition-opacity duration-300 ${
+          isUser ? "rounded-2xl rounded-br-sm text-black px-3.5 py-2" : "rounded-2xl rounded-bl-sm gap-1 px-4 py-3"
         }`}
         style={{ 
           background: isUser ? "var(--accent)" : `${meta.color}15`, 
@@ -94,20 +94,22 @@ function Message({ m, dim }: { m: TranscriptMessage; dim: boolean }) {
           opacity: dim ? 0.4 : 1 
         }}
       >
-        <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "justify-end" : "justify-start"}`}>
-          <span className="font-display text-[13px] font-semibold" style={{ color: isUser ? "rgba(0,0,0,0.6)" : meta.color }}>
-            {meta.label}
-          </span>
-          <span className={`font-mono text-[10px] tabular-nums ${isUser ? "text-black/40" : "text-[var(--text-3)]"}`}>{clock(m.ts)}</span>
-          {terminal && (
-            <span className="rounded bg-[var(--accent)]/30 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold uppercase tracking-wider text-black">
-              {m.kind}
+        {!isUser && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 justify-start">
+            <span className="font-display text-[13px] font-semibold" style={{ color: meta.color }}>
+              {meta.label}
             </span>
-          )}
-          {m.mentions.slice(0, 2).map((x, i) => (
-            <MentionChip key={i} text={x} isUser={isUser} />
-          ))}
-        </div>
+            <span className="font-mono text-[10px] tabular-nums text-[var(--text-3)]">{clock(m.ts)}</span>
+            {terminal && (
+              <span className="rounded bg-[var(--accent)]/30 px-1.5 py-0.5 font-mono text-[10.5px] font-semibold uppercase tracking-wider text-black">
+                {m.kind}
+              </span>
+            )}
+            {m.mentions.slice(0, 2).map((x, i) => (
+              <MentionChip key={i} text={x} isUser={false} />
+            ))}
+          </div>
+        )}
         <Body content={m.content} color={isUser ? "rgba(0,0,0,0.5)" : meta.color} isUser={isUser} />
       </div>
     </div>

@@ -1,13 +1,50 @@
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import "github-markdown-css/github-markdown-dark.css";
 import { fetchProjectFile, projectZipUrl } from "../api";
+import { ACTIVE_PHASES, phaseLabel, roleMeta, signalOrder } from "../theme";
 import type { ProjectInfo, RoomState, Transcript } from "../types";
 import { BandRoom } from "./BandRoom";
 import { FileTree } from "./FileTree";
 import { ProjectPreviewFrame } from "./ProjectPreviewFrame";
 
 type Tab = "chat" | "files" | "readme" | "preview";
+
+// Compact, inline agent activity: the four stations as a thin row of chips (dot + label), the active
+// one pulsing.
+function AgentStrip({ room }: { room: RoomState }) {
+  return (
+    <div className="flex items-center gap-1">
+      {signalOrder.map((r) => {
+        const a = room.agents[r];
+        const meta = roleMeta[r];
+        const active = !!a && ACTIVE_PHASES.has(a.phase);
+        const on = !!a?.connected;
+        return (
+          <span
+            key={r}
+            title={`${meta.label}: ${phaseLabel[a?.phase ?? "idle"]}`}
+            className="flex items-center gap-1 rounded-md px-1.5 py-0.5"
+            style={{ background: active ? `${meta.color}1a` : "transparent" }}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${active ? "animate-blip" : ""}`}
+              style={{ background: on ? meta.color : "var(--text-3)", opacity: on ? 1 : 0.4 }}
+            />
+            <span
+              className="font-mono text-[10.5px] uppercase tracking-wide"
+              style={{ color: active ? meta.color : "var(--text-3)" }}
+            >
+              {meta.label}
+            </span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 // The right rail of the build workspace: the produced project. A file tree + viewer, the README, and a
 // live iframe preview for static sites, plus a Download .zip. Replaces the race ProofRail in build mode.
@@ -105,7 +142,15 @@ export function OutputPanel({
             className="absolute inset-0 flex flex-col"
           >
             {tab === "chat" && room ? (
-              <BandRoom transcript={transcript || null} room={room} live={live || false} focus={null} embedded filterType="agents-only" />
+              <div className="flex h-full flex-col">
+                <div className="flex shrink-0 items-center justify-between border-b border-[var(--line)] bg-[var(--bg)] px-4 py-2.5">
+                  <span className="font-display text-[15px] font-semibold text-[var(--text)]">Agents</span>
+                  <AgentStrip room={room} />
+                </div>
+                <div className="min-h-0 flex-1">
+                  <BandRoom transcript={transcript || null} room={room} live={live || false} focus={null} embedded filterType="agents-only" />
+                </div>
+              </div>
             ) : !project ? (
               liveCode ? (
                 <div className="flex h-full min-h-0 flex-col">
@@ -135,9 +180,9 @@ export function OutputPanel({
                 </pre>
               </div>
             ) : tab === "readme" ? (
-              <div className="h-full overflow-auto p-6">
-                <article className="prose prose-sm prose-invert max-w-none prose-pre:bg-black/50 prose-pre:border prose-pre:border-[var(--line)] prose-a:text-spec">
-                  <ReactMarkdown>{project.readme || "(no README)"}</ReactMarkdown>
+              <div className="h-full overflow-auto p-6" style={{ background: "var(--bg)" }}>
+                <article className="markdown-body" style={{ background: "transparent" }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{project.readme || "(no README)"}</ReactMarkdown>
                 </article>
               </div>
             ) : (

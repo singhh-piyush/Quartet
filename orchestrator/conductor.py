@@ -363,10 +363,12 @@ def _passing_manifest(run_id: str) -> dict | None:
     p = _PROJECTS_DIR / f"{run_id}.passing.json"
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except Exception as e:
+        logging.warning("[build] _passing_manifest error reading %s: %r", p, e)
         return None
     files = data.get("files") or []
     if not files:
+        logging.warning("[build] _passing_manifest %s had no files", p)
         return None
     try:
         p.unlink()

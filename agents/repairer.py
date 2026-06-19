@@ -70,18 +70,32 @@ def run_tests(solution_code: str, test_code: str, entry_point: str) -> dict:
 
 
 @tool
-def run_project(manifest: str, project_type: str = "python") -> dict:
+def run_project(project_type: str = "python") -> dict:
     """Build and test the current multi-file project in an isolated sandbox (build mode).
 
-    Pass `manifest` as the full set of project files in this exact format, one block per file:
-        === FILE: path/to/file ===
-        ```
-        <file content>
-        ```
-    Include the Coder's code files AND the Tester's test_*.py files. Set `project_type` to "python"
-    (runs every test_*.py, or byte-compiles when there are none) or "static" (checks index.html).
+    Set `project_type` to "python" (runs every test_*.py, or byte-compiles when there are none)
+    or "static" (checks index.html). The tool automatically extracts the project files from the
+    latest message in the chat history.
     Returns a dict with keys: passed (bool), error (str or None), timed_out (bool)."""
     start = time.monotonic()
+    
+    # Extract the most recent manifest from the transcript
+    manifest = ""
+    run_id = os.environ.get("QUARTET_RUN_ID")
+    if run_id:
+        transcript_path = Path("results/transcripts") / f"{run_id}.messages.jsonl"
+        if transcript_path.exists():
+            for line in transcript_path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    # Use the last message that contains file blocks as the manifest
+                    if "=== FILE:" in data.get("content", ""):
+                        manifest = data["content"]
+                except json.JSONDecodeError:
+                    pass
+
     parsed = parse_manifest(manifest)
     files = parsed["files"]
     ptype = (parsed["type"] or project_type or "python").lower()

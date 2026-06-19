@@ -1,8 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { buildChat } from "../api";
-import { ACTIVE_PHASES, phaseLabel, roleMeta, signalOrder } from "../theme";
-import type { ModelConfig, ModelSlot, RoomState, RunStatus } from "../types";
+import type { ModelConfig, ModelSlot, RunStatus } from "../types";
 import { useLiveRun } from "../useLiveRun";
 import { useProject } from "../useProject";
 import { useTranscript } from "../useTranscript";
@@ -32,40 +31,6 @@ function statusTone(status: string): { label: string; color: string; pulse: bool
   }
 }
 
-// Compact, inline agent activity: the four stations as a thin row of chips (dot + label), the active
-// one pulsing. This REPLACES the old standalone AgentRail so Build reads as one chat, not a dashboard.
-function AgentStrip({ room }: { room: RoomState }) {
-  return (
-    <div className="flex items-center gap-1">
-      {signalOrder.map((r) => {
-        const a = room.agents[r];
-        const meta = roleMeta[r];
-        const active = !!a && ACTIVE_PHASES.has(a.phase);
-        const on = !!a?.connected;
-        return (
-          <span
-            key={r}
-            title={`${meta.label}: ${phaseLabel[a?.phase ?? "idle"]}`}
-            className="flex items-center gap-1 rounded-md px-1.5 py-0.5"
-            style={{ background: active ? `${meta.color}1a` : "transparent" }}
-          >
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${active ? "animate-blip" : ""}`}
-              style={{ background: on ? meta.color : "var(--text-3)", opacity: on ? 1 : 0.4 }}
-            />
-            <span
-              className="font-mono text-[10.5px] uppercase tracking-wide"
-              style={{ color: active ? meta.color : "var(--text-3)" }}
-            >
-              {meta.label}
-            </span>
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
 // The build workspace is a modern coding chat: LEFT a chat window (you talk, the Band agents work, all
 // in one thread with the composer docked at the bottom), RIGHT a live output window (file tree + code +
 // preview). Models and keys are configured from the header drawers, so this view stays focused.
@@ -91,7 +56,7 @@ export function BuildView({
 
   const active = status.active || status.status === "starting";
   const tone = statusTone(status.status);
-  const showOutput = active || project !== null || status.status === "error" || status.status === "done";
+  const showOutput = !!liveRunId && (active || project !== null || status.status === "error" || status.status === "done");
 
   // Default the Coder to Groq gpt-oss-120b for builds (good code, fast) the first time we have config.
   const seeded = useRef(false);
@@ -105,9 +70,11 @@ export function BuildView({
   }, [models, onUpdate]);
 
   // Sync liveRunId with the orchestrator's last run on page load
+  const synced = useRef(false);
   useEffect(() => {
-    if (!liveRunId && status.run_id && status.mode === "build") {
+    if (!synced.current && !liveRunId && status.run_id && status.mode === "build") {
       setLiveRunId(status.run_id);
+      synced.current = true;
     }
   }, [liveRunId, status.run_id, status.mode]);
 
@@ -117,13 +84,14 @@ export function BuildView({
     if (!confirm && !description.trim()) return;
     if (active || sending) return;
     setSending(true);
+    const msg = description.trim();
+    setDescription("");
     try {
       // Talk to the Orchestrator: it replies and kicks off the build (its reply + your message are
       // written into the run transcript, so they show in the chat thread below).
-      const s = await buildChat(description.trim(), projectType, undefined, liveRunId, confirm);
+      const s = await buildChat(msg, projectType, undefined, liveRunId, confirm);
       if (s.run_id) setLiveRunId(s.run_id);
       setNeedsConfirm(!!s.needs_confirmation);
-      setDescription("");
     } catch {
       /* surfaced via status */
     } finally {
@@ -132,7 +100,7 @@ export function BuildView({
   };
 
   return (
-    <motion.div layout className={`mx-auto w-full h-full min-h-0 ${showOutput ? "grid grid-cols-1 lg:grid-cols-[480px_minmax(0,1fr)] gap-3.5" : "max-w-4xl"}`}>
+    <motion.div layout className={`mx-auto w-full h-full min-h-0 ${showOutput ? "grid grid-cols-1 lg:grid-cols-[480px_minmax(0,1fr)] gap-3.5" : ""}`}>
       {/* LEFT: the chat window (thread + composer in one panel) */}
       <motion.section layout className={`flex flex-col overflow-hidden rounded-xl panel-raised ${showOutput ? "min-h-[46vh] lg:min-h-0" : "h-full"}`}>
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2.5">
@@ -145,7 +113,19 @@ export function BuildView({
               </span>
             </span>
           </div>
-          <AgentStrip room={live.room} />
+          <div className="flex items-center gap-3">
+            {liveRunId && (
+              <button
+                onClick={() => {
+                  setLiveRunId(null);
+                  setDescription("");
+                }}
+                className="rounded-md border border-[var(--line)] bg-[var(--bg)] px-2 py-1 font-mono text-[10.5px] font-semibold uppercase tracking-wider text-[var(--text-2)] transition-colors hover:border-[var(--line-strong)] hover:text-white"
+              >
+                New Chat
+              </button>
+            )}
+          </div>
         </header>
 
         <div className="min-h-0 flex-1 overflow-hidden">
@@ -202,7 +182,7 @@ export function BuildView({
                 disabled={!description.trim() || sending}
                 className="shrink-0 rounded-lg bg-[var(--accent)] px-5 py-2.5 h-[44px] font-sans text-sm font-semibold text-black shadow-[0_0_24px_-8px_var(--accent)] transition-transform hover:scale-[1.02] disabled:opacity-40"
               >
-                {sending ? "Sending..." : "Build"}
+                Build
               </button>
             )}
           </div>
