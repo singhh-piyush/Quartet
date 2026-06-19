@@ -1,0 +1,2 @@
+{"ts": "2026-06-19T06:58:34.371957+00:00", "role": "user", "sender": "You", "content": "bu9ild me an html about dogs!", "mentions": [], "kind": "message"}
+{"ts": "2026-06-19T06:58:34.372096+00:00", "role": "orchestrator", "sender": "Orchestrator", "content": "I'll have the team build a fun, self-contained HTML page about dogs with some facts and a nice layout!", "mentions": [], "kind": "message"}

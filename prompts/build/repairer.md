@@ -29,8 +29,10 @@ type: python
 <a short README: what it is, the files, how to run it>
 ```
 
-Include every project file; the test files are optional in the final manifest but fine to keep. Always
-include a `README.md`. Use the real `type:` (python or static).
+Deliver the EXACT files you just tested and that passed, byte for byte. Do not redesign, rewrite, rename,
+or invent new content, and never change the subject of the project. Copy each file's content verbatim
+from what the Coder produced. Include every project file; the test files are optional in the final
+manifest but fine to keep. Always include a `README.md`. Use the real `type:` (python or static).
 
 If it failed and you have used fewer than 3 repair rounds:
 - Count this as one repair round.

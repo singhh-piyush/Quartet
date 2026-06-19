@@ -336,6 +336,69 @@ class Handler(BaseHTTPRequestHandler):
             run_config.save(body["stack"])
         self._send_json(RUNS.start_build(description, project_type))
 
+    def _handle_build_chat(self, body: dict) -> None:
+        """Conversational entry point: the user talks to the Orchestrator, which replies and kicks off
+        the build. The user turn and the Orchestrator's reply are written into the run transcript so the
+        Build chat shows the full conversation alongside the four agents' handoffs."""
+        message = (body.get("message") or "").strip()
+        if not message:
+            self._send_json({"error": "message required"}, status=400)
+            return
+        project_type = (body.get("project_type") or "auto").lower()
+        if project_type not in ("auto", "python", "static"):
+            project_type = "auto"
+        if isinstance(body.get("stack"), dict):
+            run_config.save(body["stack"])
+            
+        confirm = body.get("confirm", False)
+        run_id = body.get("run_id")
+
+        if not run_id:
+            import uuid
+            from datetime import datetime, timezone
+            run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
+
+        self._append_chat_turn(run_id, "user", "You", message)
+
+        if confirm:
+            description = (body.get("description") or message).strip()
+            status = RUNS.start_build(description, project_type, run_id=run_id)
+            self._send_json({**status, "run_id": run_id, "project_type": project_type})
+            return
+
+        from orchestrator.orchestrator_chat import interpret
+
+        plan = interpret(message, project_type)
+        self._append_chat_turn(run_id, "orchestrator", "Orchestrator", plan["reply"])
+        self._send_json({
+            "run_id": run_id,
+            "reply": plan["reply"],
+            "description": plan["description"],
+            "project_type": plan["project_type"],
+            "needs_confirmation": True,
+            "status": "idle"
+        })
+
+    def _append_chat_turn(self, run_id: str, role: str, sender: str, content: str) -> None:
+        """Append one conversational turn to the run's message transcript (the same log the agents use),
+        so _send_transcript merges it into the Build chat thread."""
+        if not _RUN_ID_OK.match(run_id) or not content:
+            return
+        rec = {
+            "ts": datetime.utcnow().isoformat() + "+00:00",
+            "role": role,
+            "sender": sender,
+            "content": content,
+            "mentions": [],
+            "kind": "message",
+        }
+        try:
+            TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
+            with open(TRANSCRIPTS_DIR / f"{run_id}.messages.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec) + "\n")
+        except OSError:
+            pass
+
     # ---- /api/project* (the built project: tree, file, zip, static preview) ----
 
     def _send_project(self, qs: dict) -> None:
@@ -474,6 +537,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(RUNS.start(task_id))
             elif path == "/api/build":
                 self._handle_build(self._read_body() or {})
+            elif path == "/api/build/chat":
+                self._handle_build_chat(self._read_body() or {})
             elif path == "/api/stop":
                 RUNS.stop()
                 self._send_json(RUNS.status())

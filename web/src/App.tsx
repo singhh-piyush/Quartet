@@ -24,7 +24,7 @@ import { useTranscript } from "./useTranscript";
 type View = "build" | "race" | "lab";
 // The Race tab hosts Live and Replay plus the Results and Compare reports (kept here to keep the top nav small).
 type RaceTab = "live" | "replay" | "results" | "compare";
-type DrawerId = "stack" | "keys" | "pricing" | null;
+type DrawerId = "settings" | null;
 
 const TABS: { key: View; label: string }[] = [
   { key: "build", label: "Build" },
@@ -60,8 +60,16 @@ export default function App({ route }: { route: Route }) {
       .catch(() => setRuns([]));
   }, []);
 
+  const { status, start, startLab, stop } = useRunStatus();
+
+  // Sync liveRunId with the orchestrator's last run on page load
+  useEffect(() => {
+    if (!liveRunId && status.run_id && status.mode === "race") {
+      setLiveRunId(status.run_id);
+    }
+  }, [liveRunId, status.run_id, status.mode]);
+
   const player = usePlayer(replayRunId, speed, setSpeed);
-  const { status, start, startBuild, startLab, stop } = useRunStatus();
   const liveActive = view === "race" && raceTab === "live";
   const live = useLiveRun(liveActive ? liveRunId : null);
   const { models, saving, update, patchMany, reload: reloadModels } = useModels();
@@ -93,16 +101,15 @@ export default function App({ route }: { route: Route }) {
   const statusLabel = computeStatusLabel(view, raceTab, status, live.done, player.playing);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden px-6 py-5 sm:px-8 lg:px-10">
-      <header className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-4">
-        <button onClick={() => route.navigate("/")} className="flex items-center gap-4 text-left" title="Back to landing">
-          <Glyph />
-          <div>
-            <h1 className="font-display text-3xl font-extrabold tracking-tight text-[var(--text)]">QUARTET</h1>
-            <p className="hidden text-[13px] text-[var(--text-2)] sm:block">
-              four small models collaborate through Band, race one large model, and prove the solution
-            </p>
-          </div>
+    <div className="flex h-full flex-col overflow-hidden px-6 py-2 sm:px-8 lg:px-10">
+      <header className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] pb-2">
+        <button
+          onClick={() => route.navigate("/")}
+          className="flex items-center gap-2.5 text-left"
+          title="Back to landing"
+        >
+          <Glyph size={15} />
+          <span className="font-display text-base font-extrabold tracking-tight text-[var(--text)]">QUARTET</span>
         </button>
 
         <div className="flex items-center gap-3">
@@ -112,9 +119,13 @@ export default function App({ route }: { route: Route }) {
           </span>
 
           <div className="flex items-center gap-1.5">
-            <PanelButton onClick={() => setDrawer("stack")}>Stack</PanelButton>
-            <PanelButton onClick={() => setDrawer("keys")}>Keys</PanelButton>
-            {view === "lab" && <PanelButton onClick={() => setDrawer("pricing")}>Pricing</PanelButton>}
+            <PanelButton onClick={() => setDrawer("settings")}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+              </svg>
+            </PanelButton>
           </div>
 
           <nav className="flex items-center gap-1 rounded-xl border border-[var(--line)] bg-black/40 p-1">
@@ -137,25 +148,24 @@ export default function App({ route }: { route: Route }) {
         </div>
       )}
 
-      <main className="min-h-0 flex-1">
-        <div key={`${view}-${raceTab}`} className="view-enter h-full min-h-0">
-          {view === "build" ? (
-            <BuildView status={status} models={models} onUpdate={update} startBuild={startBuild} stop={stop} />
-          ) : view === "lab" ? (
-            <LabView status={status} startLab={startLab} stop={stop} />
-          ) : isRoom ? (
-            <RoomView
-              room={room}
-              transcript={transcript}
-              controls={controls}
-              error={raceTab === "live" ? live.error : player.error}
-              live={raceTab === "live"}
-            />
-          ) : (
-            <div className="h-full overflow-y-auto">
-              {raceTab === "results" ? <ResultsView animate={true} /> : <CompareView animate={true} />}
-            </div>
-          )}
+      <main className="min-h-0 flex-1 relative">
+        <div className={`absolute inset-0 ${view === "build" ? "view-enter z-10" : "hidden -z-10"}`}>
+          <BuildView status={status} models={models} onUpdate={update} stop={stop} />
+        </div>
+        <div className={`absolute inset-0 ${view === "lab" ? "view-enter z-10" : "hidden -z-10"}`}>
+          <LabView status={status} startLab={startLab} stop={stop} />
+        </div>
+        <div className={`absolute inset-0 ${view === "race" && isRoom ? "view-enter z-10" : "hidden -z-10"}`}>
+          <RoomView
+            room={room}
+            transcript={transcript}
+            controls={controls}
+            error={raceTab === "live" ? live.error : player.error}
+            live={raceTab === "live"}
+          />
+        </div>
+        <div className={`absolute inset-0 overflow-y-auto ${view === "race" && !isRoom ? "view-enter z-10" : "hidden -z-10"}`}>
+          {raceTab === "results" ? <ResultsView animate={true} /> : <CompareView animate={true} />}
         </div>
       </main>
 
@@ -166,25 +176,41 @@ export default function App({ route }: { route: Route }) {
 
       {/* Pop-up config panels (slide-over drawers), shared across every view. */}
       <Drawer
-        open={drawer === "stack"}
+        open={drawer === "settings"}
         onClose={() => setDrawer(null)}
-        title="Models and stacks"
-        subtitle="pick a provider and model per role, save a named stack"
+        title="Settings"
+        subtitle="Configure models, provider keys, and pricing"
       >
-        <StackBuilder
-          models={models}
-          status={status}
-          saving={saving}
-          onUpdate={update}
-          onPatchMany={patchMany}
-          onReloadModels={reloadModels}
-        />
-      </Drawer>
-      <Drawer open={drawer === "keys"} onClose={() => setDrawer(null)} title="Provider keys" subtitle="session only, never stored">
-        <KeyPanel />
-      </Drawer>
-      <Drawer open={drawer === "pricing"} onClose={() => setDrawer(null)} title="Price table" subtitle="dollars per 1M tokens, drives lab cost">
-        <PricingTable pricing={lab.pricing} onUpdate={lab.updatePrice} />
+        <div className="space-y-8">
+          <section>
+            <h3 className="mb-3 font-display text-sm font-semibold text-[var(--text)]">Models and stacks</h3>
+            <StackBuilder
+              models={models}
+              status={status}
+              saving={saving}
+              onUpdate={update}
+              onPatchMany={patchMany}
+              onReloadModels={reloadModels}
+            />
+          </section>
+          
+          <hr className="border-[var(--line)]" />
+          
+          <section>
+            <h3 className="mb-3 font-display text-sm font-semibold text-[var(--text)]">Provider keys</h3>
+            <KeyPanel />
+          </section>
+          
+          {view === "lab" && (
+            <>
+              <hr className="border-[var(--line)]" />
+              <section>
+                <h3 className="mb-3 font-display text-sm font-semibold text-[var(--text)]">Price table</h3>
+                <PricingTable pricing={lab.pricing} onUpdate={lab.updatePrice} />
+              </section>
+            </>
+          )}
+        </div>
       </Drawer>
     </div>
   );
@@ -236,7 +262,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
       onClick={onClick}
       className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-all duration-300 ease-spring ${
         active
-          ? "bg-repairer/15 text-repairer shadow-[inset_0_0_0_1px_rgba(52,211,153,0.3)]"
+          ? "bg-[var(--accent)]/15 text-[var(--accent)] shadow-[inset_0_0_0_1px_rgba(250,204,21,0.3)]"
           : "text-[var(--text-2)] hover:bg-white/5 hover:text-white"
       }`}
     >

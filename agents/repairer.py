@@ -1,8 +1,11 @@
 # Repairer agent: runs the Tester's tests in a sandbox, routes failures back to the Coder,
 # emits the final solution. In build mode it runs the whole multi-file project instead.
 # Run: uv run python -m agents.repairer
+import json
+import logging
 import os
 import time
+from pathlib import Path
 
 from langchain_core.tools import tool
 
@@ -14,6 +17,24 @@ from bench.sandbox import run_tests_detailed as _run_tests_detailed
 # Cap how many per-assertion cases ride along on the tool_call event (structured test data, not
 # message bodies). Enough to populate the demo's test panel without bloating the event line.
 _MAX_CASES = 40
+
+
+def _record_passing(files: list, ptype: str) -> None:
+    """Persist the exact files that just passed run_project, keyed on this run. build_project delivers
+    THESE (the sandbox-verified set) rather than the Repairer's re-typed FINAL_PROJECT, so a model that
+    regenerates or hallucinates new content in its final message cannot replace the project that passed.
+    Written next to (not inside) results/projects/<run_id>/ so build_project's dir wipe does not remove it."""
+    run_id = os.environ.get("QUARTET_RUN_ID")
+    if not run_id or not files:
+        logging.info("[repairer] _record_passing skipped (run_id=%s files=%d)", run_id, len(files or []))
+        return
+    try:
+        p = Path("results/projects") / f"{run_id}.passing.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"type": ptype, "files": files}), encoding="utf-8")
+        logging.info("[repairer] recorded passing manifest (%d files) -> %s", len(files), p)
+    except Exception as e:  # noqa: BLE001 - artifact write must never break the agent
+        logging.warning("[repairer] _record_passing failed: %s", e)
 
 
 @tool
@@ -65,6 +86,8 @@ def run_project(manifest: str, project_type: str = "python") -> dict:
     files = parsed["files"]
     ptype = (parsed["type"] or project_type or "python").lower()
     result = _run_project(files, ptype)
+    if result.get("passed") and files:
+        _record_passing(files, ptype)  # the verified set build_project will deliver
     cases = result.get("cases") or []
     n_fail = sum(1 for c in cases if not c.get("passed"))
     first_fail = next((c for c in cases if not c.get("passed")), None)

@@ -16,7 +16,7 @@ import json
 import os
 from pathlib import Path
 
-from orchestrator.config import _PROVIDER_DEFAULTS, LOCAL_MODEL
+from orchestrator.config import _GROQ_DEFAULTS, _PROVIDER_DEFAULTS, LOCAL_MODEL, provider_secret
 
 _PATH = Path(__file__).resolve().parent / "run_config.json"
 ROLES = ["spec", "coder", "tester", "repairer"]
@@ -106,16 +106,22 @@ def save(cfg: dict) -> dict:
     return merged
 
 
-# Build-mode role defaults: the Coder runs Groq's gpt-oss-120b so a build produces good code fast in
-# the demo. Applied only to slots the user has not moved off the local placeholder (see
-# apply_build_defaults), so an explicit choice always wins.
-BUILD_DEFAULTS = {"coder": {"provider": "groq", "model": "openai/gpt-oss-120b"}}
+# Build-mode role defaults: all four agents run Groq's gpt-oss models so a build produces good code
+# fast in the demo (a small coder model echoes the room's system block instead of planning). Applied
+# only to slots the user has not moved off the local placeholder (an explicit choice always wins) AND
+# only when a Groq key is actually available; with no key the slot stays local so the run does not fail
+# fatally on a keyless cloud provider (the user can then run a local model server instead).
+BUILD_DEFAULTS = {role: {"provider": "groq", "model": model} for role, model in _GROQ_DEFAULTS.items()}
 _LOCAL_PLACEHOLDERS = {_AGENTS_MODEL_DEFAULT, LOCAL_MODEL, "local-model"}
 
 
 def apply_build_defaults(cfg: dict) -> dict:
-    """Return cfg with BUILD_DEFAULTS overlaid onto any agent slot still at the local placeholder."""
+    """Return cfg with BUILD_DEFAULTS overlaid onto any agent slot still at the local placeholder, but
+    only if the default provider (Groq) has a usable key. Without a key the slot is left untouched."""
+    have_groq = bool(provider_secret("groq").get("api_key"))
     out = {**cfg, "agents": {r: dict(s) for r, s in cfg["agents"].items()}, "large": dict(cfg["large"])}
+    if not have_groq:
+        return out
     for role, default in BUILD_DEFAULTS.items():
         slot = out["agents"].get(role, {})
         if slot.get("provider") == "local" and slot.get("model") in _LOCAL_PLACEHOLDERS:

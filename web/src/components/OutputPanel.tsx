@@ -1,16 +1,35 @@
 import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import ReactMarkdown from "react-markdown";
 import { fetchProjectFile, projectZipUrl } from "../api";
-import type { ProjectInfo } from "../types";
+import type { ProjectInfo, RoomState, Transcript } from "../types";
+import { BandRoom } from "./BandRoom";
 import { FileTree } from "./FileTree";
 import { ProjectPreviewFrame } from "./ProjectPreviewFrame";
 
-type Tab = "files" | "readme" | "preview";
+type Tab = "chat" | "files" | "readme" | "preview";
 
 // The right rail of the build workspace: the produced project. A file tree + viewer, the README, and a
 // live iframe preview for static sites, plus a Download .zip. Replaces the race ProofRail in build mode.
-export function OutputPanel({ project, runId }: { project: ProjectInfo | null; runId: string | null }) {
+export function OutputPanel({
+  project,
+  runId,
+  liveCode = "",
+  transcript,
+  room,
+  live,
+}: {
+  project: ProjectInfo | null;
+  runId: string | null;
+  // Latest candidate code from the room, shown streaming in the output window before the finished
+  // multi-file project lands on disk.
+  liveCode?: string;
+  transcript?: Transcript | null;
+  room?: RoomState;
+  live?: boolean;
+}) {
   const isStatic = project?.type === "static" && project?.has_static_entry;
-  const [tab, setTab] = useState<Tab>("files");
+  const [tab, setTab] = useState<Tab>("chat");
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
 
@@ -60,6 +79,7 @@ export function OutputPanel({ project, runId }: { project: ProjectInfo | null; r
           )}
         </div>
         <div className="flex items-center gap-1.5">
+          <TabBtn active={tab === "chat"} onClick={() => setTab("chat")}>Agent Chat</TabBtn>
           <TabBtn active={tab === "files"} onClick={() => setTab("files")}>Files</TabBtn>
           <TabBtn active={tab === "readme"} onClick={() => setTab("readme")}>README</TabBtn>
           {isStatic && <TabBtn active={tab === "preview"} onClick={() => setTab("preview")}>Preview</TabBtn>}
@@ -74,32 +94,59 @@ export function OutputPanel({ project, runId }: { project: ProjectInfo | null; r
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
-        {!project ? (
-          <div className="flex h-full items-center justify-center px-6 text-center">
-            <p className="font-mono text-[12.5px] leading-relaxed text-[var(--text-3)]">
-              The finished project appears here: a file tree, the README, a download, and a live preview
-              for static pages. Describe what to build and run it.
-            </p>
-          </div>
-        ) : tab === "files" ? (
-          <div className="grid h-full min-h-0 grid-cols-[minmax(8rem,11rem)_1fr]">
-            <div className="min-h-0 overflow-y-auto border-r border-[var(--line)] p-2">
-              <FileTree files={project.files} selected={selected} onSelect={setSelected} />
-            </div>
-            <pre className="min-h-0 overflow-auto p-3 font-mono text-[12.5px] leading-relaxed text-[var(--text)]">
-              {content}
-            </pre>
-          </div>
-        ) : tab === "readme" ? (
-          <pre className="h-full overflow-auto whitespace-pre-wrap p-4 font-sans text-[13.5px] leading-relaxed text-[var(--text-2)]">
-            {project.readme || "(no README)"}
-          </pre>
-        ) : (
-          <div className="h-full p-3">
-            {runId && <ProjectPreviewFrame runId={runId} />}
-          </div>
-        )}
+      <div className="min-h-0 flex-1 overflow-hidden relative">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={tab}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute inset-0 flex flex-col"
+          >
+            {tab === "chat" && room ? (
+              <BandRoom transcript={transcript || null} room={room} live={live || false} focus={null} embedded filterType="agents-only" />
+            ) : !project ? (
+              liveCode ? (
+                <div className="flex h-full min-h-0 flex-col">
+                  <div className="flex shrink-0 items-center gap-2 border-b border-[var(--line)] px-4 py-1.5">
+                    <span className="h-1.5 w-1.5 animate-blip rounded-full bg-coder" />
+                    <span className="font-mono text-[11px] uppercase tracking-widest text-coder">writing code</span>
+                  </div>
+                  <pre className="min-h-0 flex-1 overflow-auto p-3 font-mono text-[12.5px] leading-relaxed text-[var(--text)]">
+                    {liveCode}
+                  </pre>
+                </div>
+              ) : (
+                <div className="flex h-full items-center justify-center px-6 text-center">
+                  <p className="font-mono text-[12.5px] leading-relaxed text-[var(--text-3)]">
+                    The finished project appears here: a file tree, the README, a download, and a live preview
+                    for static pages. Describe what to build and run it.
+                  </p>
+                </div>
+              )
+            ) : tab === "files" ? (
+              <div className="grid h-full min-h-0 grid-cols-[minmax(8rem,11rem)_1fr]">
+                <div className="min-h-0 overflow-y-auto border-r border-[var(--line)] p-2">
+                  <FileTree files={project.files} selected={selected} onSelect={setSelected} />
+                </div>
+                <pre className="min-h-0 overflow-auto p-3 font-mono text-[12.5px] leading-relaxed text-[var(--text)]">
+                  {content}
+                </pre>
+              </div>
+            ) : tab === "readme" ? (
+              <div className="h-full overflow-auto p-6">
+                <article className="prose prose-sm prose-invert max-w-none prose-pre:bg-black/50 prose-pre:border prose-pre:border-[var(--line)] prose-a:text-spec">
+                  <ReactMarkdown>{project.readme || "(no README)"}</ReactMarkdown>
+                </article>
+              </div>
+            ) : (
+              <div className="h-full p-3">
+                {runId && <ProjectPreviewFrame runId={runId} />}
+              </div>
+            )}
+          </motion.div>
+        </AnimatePresence>
       </div>
     </section>
   );

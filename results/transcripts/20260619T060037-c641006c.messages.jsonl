@@ -1,0 +1,2 @@
+{"ts": "2026-06-19T06:00:37.200359+00:00", "role": "user", "sender": "You", "content": "hey", "mentions": [], "kind": "message"}
+{"ts": "2026-06-19T06:00:37.200763+00:00", "role": "orchestrator", "sender": "Orchestrator", "content": "Hey! What would you like me to have the team build today?", "mentions": [], "kind": "message"}

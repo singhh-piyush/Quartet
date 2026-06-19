@@ -28,8 +28,8 @@ _CONFIG_PATH = Path(__file__).parent.parent / "agent_config.yaml"
 # Local OpenAI-compatible endpoints. Two servers in the default topology: the four agents run a small
 # coder model on :8081, the large competitor runs Qwen3.6 on :8080. make_llm uses LOCAL_BASE_URL, which
 # the launcher sets per process (agents -> LOCAL_AGENTS_URL, large -> LOCAL_LARGE_URL) so each hits its
-# own server. The default keeps :8080 for back-compat when nothing sets it.
-LOCAL_BASE_URL = os.environ.get("LOCAL_BASE_URL", "http://localhost:8080/v1")
+# own server. The default keeps :8081 for back-compat when nothing sets it.
+LOCAL_BASE_URL = os.environ.get("LOCAL_BASE_URL", "http://localhost:8081/v1")
 LOCAL_LARGE_URL = os.environ.get("LOCAL_LARGE_URL", "http://localhost:8080/v1")
 LOCAL_AGENTS_URL = os.environ.get("LOCAL_AGENTS_URL", "http://localhost:8081/v1")
 AIMLAPI_BASE_URL = "https://api.aimlapi.com/v1"

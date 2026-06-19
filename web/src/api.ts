@@ -165,6 +165,14 @@ export function startBuild(description: string, projectType: string, stack?: Par
   return postJson<RunStatus>("/api/build", { description, project_type: projectType, stack }, "build");
 }
 
+// Conversational build: the user talks to the Orchestrator, which replies and kicks off the build.
+// Returns the run status plus the Orchestrator's reply (also written into the run transcript).
+export type BuildChatResult = RunStatus & { reply: string; description: string; project_type: string; needs_confirmation?: boolean };
+
+export function buildChat(message: string, projectType: string, stack?: Partial<ModelConfig>, runId?: string | null, confirm?: boolean): Promise<BuildChatResult> {
+  return postJson<BuildChatResult>("/api/build/chat", { message, project_type: projectType, stack, run_id: runId, confirm }, "build chat");
+}
+
 export function fetchProject(runId: string): Promise<ProjectInfo> {
   return getJson<ProjectInfo>(`/api/project?run_id=${encodeURIComponent(runId)}`, "project");
 }

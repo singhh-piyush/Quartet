@@ -23,6 +23,12 @@ export function AgentCard({ role, state, current = false, onSelect, selected = f
   const meta = roleMeta[role];
   const live = state.connected;
   const border = selected ? `${meta.color}88` : live ? "var(--line)" : "rgba(255,255,255,0.08)";
+  // Dim, always-on role-tinted border glow for a live station. Deliberately fainter than the moving
+  // `.flow-ring` (which AgentRail overlays) so the travelling light always reads brighter. None when offline.
+  const restGlow = live ? `0 0 16px -6px ${meta.color}, inset 0 0 12px -10px ${meta.color}` : "";
+  const boxShadow = [selected ? `0 0 0 1px ${meta.color}44` : "", restGlow, "var(--elevate)"]
+    .filter(Boolean)
+    .join(", ");
 
   return (
     <div
@@ -32,7 +38,7 @@ export function AgentCard({ role, state, current = false, onSelect, selected = f
       }`}
       style={{
         borderColor: border,
-        boxShadow: selected ? `0 0 0 1px ${meta.color}44, var(--elevate)` : "var(--elevate)",
+        boxShadow,
         opacity: live ? 1 : 0.45,
       }}
     >

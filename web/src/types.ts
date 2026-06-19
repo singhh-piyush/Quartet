@@ -22,10 +22,12 @@ export interface QuartetEvent {
     | "terminal_emitted"
     | "baseline_started"
     | "baseline_solution"
-    | "scored";
+    | "scored"
+    | "agent_stream";
   // type-specific extras (all optional)
   sender?: string;
   preview?: string;
+  text?: string;
   mentions?: string[];
   model?: string;
   models?: Record<string, string>; // run_started: role -> model (incl. single_large)
@@ -95,6 +97,7 @@ export interface AgentState {
   posts: number;
   received: number;
   lastPreview: string;
+  streamPreview: string;
   model: string;
 }
 

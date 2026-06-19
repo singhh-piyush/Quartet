@@ -30,16 +30,27 @@ export function ProviderKeyRow({
     if (isOC && status?.base_url) setBaseUrl(status.base_url);
   }, [isOC, status?.base_url]);
 
-  const save = () => {
-    if (!apiKey.trim() && !(isOC && baseUrl.trim())) return;
-    onSave(apiKey.trim(), isOC ? baseUrl.trim() : undefined);
+  const hasTyped = () => !!apiKey.trim() || (isOC && !!baseUrl.trim());
+
+  const save = async () => {
+    if (!hasTyped()) return;
+    await onSave(apiKey.trim(), isOC ? baseUrl.trim() : undefined);
     setApiKey("");
   };
-  const validate = () => {
+  // Validate is self-contained: if there is a freshly typed key/base_url, store it FIRST (awaited) so
+  // the backend has it, then check. Otherwise validating a just-typed key races the save and the server
+  // reports "no key/base_url set for this provider".
+  const validate = async () => {
     setValidating(true);
-    onValidate()
-      .then(setValidation)
-      .finally(() => setValidating(false));
+    try {
+      if (hasTyped()) {
+        await onSave(apiKey.trim(), isOC ? baseUrl.trim() : undefined);
+        setApiKey("");
+      }
+      setValidation(await onValidate());
+    } finally {
+      setValidating(false);
+    }
   };
 
   // Distinguish a BYO/env key (green) from the server's rate-limited shared default (amber).

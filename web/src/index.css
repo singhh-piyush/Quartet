@@ -28,6 +28,7 @@
   --conductor: #8b94a3;
   --pass: #34d399;
   --fail: #f43f5e;
+  --accent: #facc15;
 
   --font-display: "Bricolage Grotesque", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
@@ -94,24 +95,36 @@ body::after {
   inset: -2px; /* sit just outside the card's border box */
   z-index: 2; /* render ABOVE the card so the glowing outline shows (it is only a thin masked band) */
   border-radius: 10px; /* card rounded-lg(8px) + 2px inset, stays concentric with the outline */
-  padding: 2.5px; /* thickness of the visible ring band */
+  padding: 3px; /* thickness of the visible ring band (bolder than before) */
   pointer-events: none;
   opacity: 0; /* conductor drives this; cross-fades via the transition below */
-  transition: opacity 240ms linear;
+  transition: opacity 260ms linear; /* fade a touch slower than the connector so the light overlaps the gap */
   /* a bright arc whose position around the ring is --angle (driven per-frame by the conductor in AgentRail so
-     the circling and the handoff are one continuous light - NOT a self-contained CSS spin) */
+     the circling and the handoff are one continuous light - NOT a self-contained CSS spin). The bright band is
+     a plateau (50deg..90deg, centred on ~70 = ARC_PEAK) so the travelling light reads bold, not a thin sliver. */
   background: conic-gradient(
     from var(--angle, 0deg),
     transparent 0deg,
-    var(--flow-color, #fff) 70deg,
+    var(--flow-color, #fff) 50deg,
+    var(--flow-color, #fff) 90deg,
     transparent 150deg
   );
   /* mask to just the padding band -> only the rounded-rect outline shows, centre stays clear */
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  /* a strong glow: tight bright halo + soft wide bloom, same colour, so the outline really glows */
-  filter: blur(2.5px) drop-shadow(0 0 6px var(--flow-color, #fff)) drop-shadow(0 0 14px var(--flow-color, #fff));
+  /* the brightest tier: a tight bright halo + two wider blooms, same colour, so the moving outline really glows
+     (this is the MOVING light - it must out-glow the dim always-on card border below) */
+  filter: blur(2px) drop-shadow(0 0 8px var(--flow-color, #fff)) drop-shadow(0 0 18px var(--flow-color, #fff))
+    drop-shadow(0 0 32px var(--flow-color, #fff));
+}
+
+/* Dim, always-on role-tinted border glow that sits UNDER the moving light. Components set --rest-color (the
+   agent's colour) and add this class; the glow is deliberately fainter than `.flow-ring` so the moving pulse
+   always reads brighter. Pairs with the card's own --elevate shadow. */
+.station-glow {
+  box-shadow: 0 0 14px -6px var(--rest-color, transparent), inset 0 0 12px -10px var(--rest-color, transparent),
+    var(--elevate);
 }
 
 @property --angle {
@@ -132,17 +145,19 @@ body::after {
   top: 50%;
   left: 0;
   width: 22px;
-  height: 2.5px;
-  margin-top: -1.25px;
+  height: 3px; /* match the .flow-ring band thickness so the travelling glow is the same size as the circling glow */
+  margin-top: -1.5px;
   border-radius: 9999px;
   pointer-events: none;
   opacity: 0;
   background: linear-gradient(to right, transparent, var(--pf, #fff) 40%, var(--pf, #fff) 60%, transparent);
-  filter: blur(2.5px) drop-shadow(0 0 6px var(--pf, #fff)) drop-shadow(0 0 14px var(--pf, #fff));
+  /* matched to `.flow-ring`'s brighter bloom so the arc and the travelling blob are the same material */
+  filter: blur(2px) drop-shadow(0 0 8px var(--pf, #fff)) drop-shadow(0 0 18px var(--pf, #fff))
+    drop-shadow(0 0 32px var(--pf, #fff));
   /* travel across the gap on the compositor (no per-frame layout): centre goes 0 -> 32px (the w-8 connector
      width); the -11px centres the 22px blob so it overshoots into both cards. Keep 32px in sync with w-8. */
   transform: translateX(calc(var(--progress, 0) * 32px - 11px));
-  transition: opacity 200ms linear;
+  transition: opacity 140ms linear; /* light up fast so the connector is lit before the source ring fades */
 }
 
 .flow-conn[data-dir="rev"] {
@@ -170,14 +185,6 @@ body::after {
 
 .font-mono {
   font-family: var(--font-mono);
-}
-
-/* Quartet-tinted gradient text for the landing headline accent. */
-.text-gradient {
-  background: linear-gradient(100deg, var(--spec), var(--coder) 45%, var(--repairer));
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
 }
 
 /* Smooth page-transition animation for view switching. The wrapper is keyed on the active view so it
@@ -214,31 +221,6 @@ body::after {
   100% {
     opacity: 1;
     transform: translateY(0);
-  }
-}
-
-/* Landing atmosphere: a soft, slow-breathing radial glow tinted by the four agent colours, behind the
-   hero, so the pure-black page has depth instead of a flat void. */
-.landing-aura {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(58% 48% at 50% -5%, rgba(56, 189, 248, 0.12), transparent 70%),
-    radial-gradient(42% 40% at 86% 16%, rgba(167, 139, 250, 0.11), transparent 70%),
-    radial-gradient(44% 42% at 10% 26%, rgba(52, 211, 153, 0.09), transparent 70%),
-    radial-gradient(40% 38% at 70% 80%, rgba(251, 191, 36, 0.06), transparent 70%);
-  animation: auraBreathe 13s ease-in-out infinite;
-}
-
-@keyframes auraBreathe {
-  0%,
-  100% {
-    opacity: 0.65;
-  }
-  50% {
-    opacity: 1;
   }
 }
 
@@ -282,7 +264,6 @@ body::after {
 @media (prefers-reduced-motion: reduce) {
   .reveal,
   .view-enter,
-  .landing-aura,
   .drawer-backdrop,
   .drawer-panel {
     animation: none;

@@ -18,6 +18,7 @@ function freshAgent(): AgentState {
     posts: 0,
     received: 0,
     lastPreview: "",
+    streamPreview: "",
     model: "",
   };
 }
@@ -123,7 +124,7 @@ export function reduceRoom(prev: RoomState, ev: QuartetEvent): RoomState {
 
     case "message_received":
       if (role !== "conductor") {
-        setAgent(role, { phase: "receiving", joined: true, received: state.agents[role].received + 1 });
+        setAgent(role, { phase: "receiving", joined: true, received: state.agents[role].received + 1, streamPreview: "" });
         state.activeRole = role;
       }
       pushFeed({
@@ -149,12 +150,21 @@ export function reduceRoom(prev: RoomState, ev: QuartetEvent): RoomState {
       break;
     }
 
+    case "agent_stream":
+      setAgent(role, {
+        phase: "thinking",
+        streamPreview: state.agents[role].streamPreview + (ev.text || ""),
+      });
+      state.activeRole = role;
+      break;
+
     case "message_posted":
       if (role !== "conductor") {
         setAgent(role, {
           phase: "posted",
           posts: state.agents[role].posts + 1,
           lastPreview: ev.preview ?? "",
+          streamPreview: "",
         });
         state.activeRole = role;
         if (role === "coder") {

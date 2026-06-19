@@ -66,6 +66,23 @@ _SEND_TOOL = "band_send_message"
 _MENTION_RE = re.compile(r"@([A-Za-z][A-Za-z0-9_-]*)")
 # Default next hop per role when the model's text named no @Role (Repairer ends at the Conductor).
 _HANDOFF = {"spec": "Coder", "coder": "Tester", "tester": "Repairer", "repairer": "Conductor"}
+# Only these names are valid handoff targets. The room's participant list embeds user/agent handles
+# (e.g. @singhpiyush/coder, @john); a weak model that echoes that block would otherwise have those
+# usernames scraped as "mentions" and misroute the chain. We keep only real role names.
+_KNOWN_ROLES = {"spec", "coder", "tester", "repairer", "conductor"}
+
+
+def _looks_like_echo(text: str) -> bool:
+    """True when the model just parroted the injected system/participants context instead of answering.
+    Small local models sometimes return the '## Current Participants' block (and the band_send_message
+    instruction) verbatim; posting that as a handoff propagates garbage and never reaches a terminal."""
+    t = (text or "").lstrip()
+    head = t[:400].lower()
+    return (
+        t.startswith("[System]")
+        or "## current participants" in head
+        or "in band_send_message mentions" in head
+    )
 
 
 def _ai_text(out) -> str:
@@ -224,6 +241,7 @@ class _TelemetryAdapter(LangGraphAdapter):
             t = _ai_text((event.get("data") or {}).get("chunk"))
             if t:
                 self._turn_stream[room_id] = self._turn_stream.get(room_id, "") + t
+                emit("agent_stream", role=self._role, room_id=room_id, text=t)
         elif etype == "on_chat_model_end":
             out = (event.get("data") or {}).get("output")
             tcs = [getattr(tc, "get", lambda *_: None)("name") if isinstance(tc, dict) else getattr(tc, "name", "?")
@@ -252,6 +270,8 @@ class _TelemetryAdapter(LangGraphAdapter):
             "message_received", role=self._role, room_id=room_id,
             sender=msg.sender_name or msg.sender_id, preview=msg.content,
         )
+        logging.info("[%s] inbound from %s: %s", self._role, msg.sender_name or msg.sender_id,
+                     " ".join((msg.content or "").split())[:160])
         self._turn_posted[room_id] = False
         self._turn_content[room_id] = ""
         self._turn_stream[room_id] = ""
@@ -273,21 +293,31 @@ class _TelemetryAdapter(LangGraphAdapter):
             # Fallback: the model gave a final answer but never called band_send_message, so the loop
             # would stall. Post that answer ourselves, routed to whoever the text @mentions, else next.
             content = self._turn_content.get(room_id, "").strip()
-            if not content:
-                logging.info("[%s] model neither called %s nor produced final text to auto-post", self._role, _SEND_TOOL)
+            if not content or _looks_like_echo(content):
+                # Empty, or the model just parroted the participants/system block. Posting it would
+                # propagate garbage down the chain (and never reach a FINAL_PROJECT), so we stay quiet
+                # and let the run time out cleanly rather than hand off noise.
+                logging.info("[%s] no usable answer to auto-post (echo=%s, len=%d); not posting",
+                             self._role, _looks_like_echo(content), len(content))
             else:
-                named = _MENTION_RE.findall(content)
+                # Keep only real role names; the participant list embeds usernames (@singhpiyush, @john)
+                # that must never become handoff targets.
+                named = [m for m in _MENTION_RE.findall(content) if m.lower() in _KNOWN_ROLES]
                 mentions = _resolve_targets(tools, named)
+                nxt = _HANDOFF.get(self._role)
+                route = named
+                logging.info("[%s] auto-post route: roles=%s resolved=%s handoff=%s",
+                             self._role, named, mentions, nxt)
                 if not mentions:
-                    nxt = _HANDOFF.get(self._role)
                     mentions = _resolve_targets(tools, [nxt]) if nxt else []
+                    route = [nxt] if nxt else []
                     if mentions and not named:
                         content = f"@{nxt} {content}"  # surface the routing in the visible text too
                 if mentions:
                     try:
                         await tools.send_message(content, mentions=mentions)
-                        _record_message(self._role, content, named or mentions)
-                        emit("message_posted", role=self._role, room_id=room_id, preview=content, mentions=named or mentions)
+                        _record_message(self._role, content, route)
+                        emit("message_posted", role=self._role, room_id=room_id, preview=content, mentions=route)
                         logging.info("[%s] auto-posted final answer (model skipped %s)", self._role, _SEND_TOOL)
                     except Exception as e:  # noqa: BLE001 - a failed fallback must not crash the agent
                         logging.warning("[%s] auto-post fallback failed: %s", self._role, e)

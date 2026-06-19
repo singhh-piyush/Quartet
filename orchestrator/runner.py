@@ -223,10 +223,10 @@ class RunManager:
         """Begin a live HumanEval race run for task_id. Stops any in-flight run first."""
         return self._start(task_id, build=None)
 
-    def start_build(self, description: str, project_type: str = "auto") -> dict:
+    def start_build(self, description: str, project_type: str = "auto", run_id: str | None = None) -> dict:
         """Begin a live BUILD run: the quartet builds a small project from a plain-language request.
         No large-model race; the Coder defaults to Groq gpt-oss-120b (run_config.apply_build_defaults)."""
-        return self._start("build", build={"description": description, "project_type": project_type or "auto"})
+        return self._start("build", build={"description": description, "project_type": project_type or "auto"}, run_id=run_id)
 
     def start_lab(self, stack_name: str, n: int = 5) -> dict:
         """Begin a Stack Lab run: the quartet (this stack's models) over the n hardest HumanEval problems,
@@ -263,10 +263,10 @@ class RunManager:
             self._thread.start()
         return self.status()
 
-    def _start(self, task_id: str, build: dict | None) -> dict:
+    def _start(self, task_id: str, build: dict | None, run_id: str | None = None) -> dict:
         """Shared launcher for race and build runs."""
         self.stop()
-        run_id = _mint_run_id()
+        run_id = run_id or _mint_run_id()
         # The config the run will actually use (build overlays the Groq coder default).
         cfg = run_config.apply_build_defaults(run_config.load()) if build else run_config.load()
         # Fail fast on an unrunnable config (e.g. agents on a keyed provider with no key) instead of
@@ -333,7 +333,8 @@ class RunManager:
                 # Build mode: a synthetic problem carrying the plain-language request (no dataset).
                 problem = {
                     "task_id": f"build-{run_id}",
-                    "prompt": build["description"],
+                    "run_id": run_id,  # the project dir is keyed on this so the UI (which polls the
+                    "prompt": build["description"],  # status run_id) finds the files build_project writes
                     "mode": "build",
                     "project_type": build.get("project_type", "auto"),
                     "entry_point": None,

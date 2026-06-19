@@ -312,6 +312,9 @@ def harvest(client: RestClient, room_id: str, repairer_id: str, conductor_id: st
             from_repairer = msg.sender_id == repairer_id or (msg.sender_name or "").lower() == "repairer"
             if from_repairer:
                 status, solution = classify(msg.content)
+                if not status:
+                    has_tok = bool(_FINAL_PROJECT.search(msg.content) or _FINAL.search(msg.content))
+                    logging.info("    (Repairer message not terminal; final-token=%s, no parseable payload)", has_tok)
                 if status and not _mentions_conductor(msg, conductor_id):
                     logging.info("    (ignoring Repairer %s without @Conductor mention)", status)
                     continue
@@ -354,10 +357,34 @@ def _readme_fallback(problem: dict, ptype: str, files: list[dict]) -> str:
     )
 
 
+def _passing_manifest(run_id: str) -> dict | None:
+    """The sandbox-verified file set the Repairer's run_project last passed (written by
+    agents/repairer.py), or None when absent/empty. Consumed once, then removed."""
+    p = _PROJECTS_DIR / f"{run_id}.passing.json"
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    files = data.get("files") or []
+    if not files:
+        return None
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    logging.info("[build] using sandbox-verified manifest (%d files) from %s", len(files), p)
+    return {"type": data.get("type"), "files": files}
+
+
 def build_project(run_id: str, problem: dict, manifest_text: str) -> dict:
-    """Write a FINAL_PROJECT manifest to results/projects/<run_id>/, ensure a README, record a
-    _manifest.json, zip it, and confirm it builds. Returns {type, files, passed, dir, zip}."""
-    manifest = parse_manifest(manifest_text)
+    """Write the project to results/projects/<run_id>/, ensure a README, record a _manifest.json, zip
+    it, and confirm it builds. Returns {type, files, passed, dir, zip}.
+
+    Source of truth for the files: the sandbox-VERIFIED set the Repairer's run_project last passed
+    (results/projects/<run_id>.passing.json), when present. Only if that sidecar is absent do we parse
+    the Repairer's FINAL_PROJECT text, which a weak model may regenerate or hallucinate (delivering a
+    different project than the one that actually passed)."""
+    manifest = _passing_manifest(run_id) or parse_manifest(manifest_text)
     files = manifest["files"]
     ptype = (manifest["type"] or problem.get("project_type") or "python").lower()
     if ptype not in ("python", "static"):
@@ -422,7 +449,10 @@ def drive_room(client: RestClient, problem: dict, room_id: str, agent_ids: dict,
     if status == "FINAL_PROJECT":
         # Build mode: write the multi-file project, zip it, confirm it builds, and score on that.
         try:
-            project = build_project(os.environ.get("QUARTET_RUN_ID", task_id), problem, solution)
+            # Key the project dir on the run_id the UI polls (problem.run_id when the launcher set it,
+            # else QUARTET_RUN_ID in a spawned process), NOT the build-<run_id> task_id.
+            build_run_id = problem.get("run_id") or os.environ.get("QUARTET_RUN_ID") or task_id
+            project = build_project(build_run_id, problem, solution)
             record["passed"] = project["passed"]
             record["project"] = project
             if not project["passed"]:
