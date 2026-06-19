@@ -224,6 +224,23 @@ body::after {
   }
 }
 
+/* Build output panel: rises in (fade + lift + faint scale) the moment the agents start working, so the
+   right pane does not just pop into existence. Keyed on the run id so it replays each new build. */
+.output-rise {
+  animation: outputRise 0.45s var(--ease-spring) both;
+}
+
+@keyframes outputRise {
+  0% {
+    opacity: 0;
+    transform: translateY(12px) scale(0.982);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* Slow conic shimmer on the landing wordmark underline + step connectors. */
 @keyframes lineSweep {
   0% {
@@ -265,9 +282,13 @@ body::after {
   .reveal,
   .view-enter,
   .drawer-backdrop,
-  .drawer-panel {
+  .drawer-panel,
+  .output-rise {
     animation: none;
     opacity: 1;
+  }
+  .output-rise {
+    transform: none;
   }
   .drawer-panel {
     transform: none;

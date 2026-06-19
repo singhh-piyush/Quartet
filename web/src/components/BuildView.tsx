@@ -154,8 +154,10 @@ export function BuildView({
         transition: "grid-template-columns 0.32s cubic-bezier(0.16, 1, 0.3, 1)",
       }}
     >
-      {/* LEFT: the chat window (thread + composer in one panel) */}
-      <section className="flex flex-col overflow-hidden h-full rounded-xl panel-raised">
+      {/* LEFT: the chat window (thread + composer in one panel). Capped + centered so that when the
+          output pane opens and this column shrinks from full-width to 480px, the chat barely reflows
+          (it was already ~this wide), keeping the bring-up smooth. */}
+      <section className="flex flex-col overflow-hidden h-full rounded-xl panel-raised mx-auto w-full max-w-[680px]">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2.5">
           <div className="flex items-center gap-2.5">
             <span className="font-display text-[15px] font-semibold text-[var(--text)]">Build chat</span>
@@ -295,7 +297,9 @@ export function BuildView({
         }}
       >
         {(showOutput || liveRunId) && (
-          <OutputPanel project={project} runId={liveRunId} liveCode={live.room.code.preview} transcript={transcript} room={live.room} live={true} buildDone={live.done} />
+          <div key={liveRunId ?? "output"} className={`h-full min-h-0 ${showOutput ? "output-rise" : ""}`}>
+            <OutputPanel project={project} runId={liveRunId} liveCode={live.room.code.preview} transcript={transcript} room={live.room} live={true} buildDone={live.done} />
+          </div>
         )}
       </div>
     </div>

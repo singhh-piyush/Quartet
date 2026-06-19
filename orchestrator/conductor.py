@@ -361,6 +361,10 @@ def _passing_manifest(run_id: str) -> dict | None:
     """The sandbox-verified file set the Repairer's run_project last passed (written by
     agents/repairer.py), or None when absent/empty. Consumed once, then removed."""
     p = _PROJECTS_DIR / f"{run_id}.passing.json"
+    if not p.exists():
+        # Expected whenever the Repairer skipped run_project; build_project falls back to the Coder's
+        # delivered files. Not an error, so do not warn (this is now the common path).
+        return None
     try:
         data = json.loads(p.read_text(encoding="utf-8"))
     except Exception as e:
@@ -378,19 +382,72 @@ def _passing_manifest(run_id: str) -> dict | None:
     return {"type": data.get("type"), "files": files}
 
 
+def _coder_manifest(run_id: str) -> dict | None:
+    """The Coder's actual delivered files, parsed from the LARGEST role=coder message that carries
+    `=== FILE:` blocks in the run transcript. This is the author-of-record file set. Returns
+    {type, files} or None.
+
+    Guardrail: build_project ships THESE rather than the Repairer's re-typed FINAL_PROJECT. A weak
+    Repairer routinely hallucinates an entirely different project (e.g. a python main.py for a
+    static-website request), and when it skips run_project there is no verified sidecar to catch it.
+    The Coder authors the files; the Repairer only verifies. Restricting to role=coder also means the
+    Repairer's own (possibly hallucinated) FINAL_PROJECT text can never be picked here."""
+    if not run_id:
+        return None
+    path = Path("results/transcripts") / f"{run_id}.messages.jsonl"
+    if not path.exists():
+        return None
+    best = ""
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (d.get("role") or "").lower() != "coder":
+                continue
+            c = d.get("content") or ""
+            if "=== FILE:" in c and len(c) > len(best):
+                best = c
+    except OSError:
+        return None
+    if not best:
+        return None
+    parsed = parse_manifest(best)
+    if not parsed["files"]:
+        return None
+    logging.info("[build] using Coder's delivered files (%d) from transcript", len(parsed["files"]))
+    return parsed
+
+
+def _infer_type(files: list[dict], fallback: str) -> str:
+    """Infer the project type from the actual file set, so a Repairer that MISLABELS the type cannot
+    flip a static site to python (or vice versa). Any .html (esp. index.html) -> static; any .py ->
+    python; otherwise the requested fallback."""
+    paths = [(f.get("path") or "").lower() for f in files]
+    if any(p.endswith(".html") for p in paths):
+        return "static"
+    if any(p.endswith(".py") for p in paths):
+        return "python"
+    return fallback if fallback in ("python", "static") else "python"
+
+
 def build_project(run_id: str, problem: dict, manifest_text: str) -> dict:
     """Write the project to results/projects/<run_id>/, ensure a README, record a _manifest.json, zip
     it, and confirm it builds. Returns {type, files, passed, dir, zip}.
 
-    Source of truth for the files: the sandbox-VERIFIED set the Repairer's run_project last passed
-    (results/projects/<run_id>.passing.json), when present. Only if that sidecar is absent do we parse
-    the Repairer's FINAL_PROJECT text, which a weak model may regenerate or hallucinate (delivering a
-    different project than the one that actually passed)."""
-    manifest = _passing_manifest(run_id) or parse_manifest(manifest_text)
+    Source of truth for the files, in priority order: (1) the sandbox-VERIFIED set the Repairer's
+    run_project last passed (results/projects/<run_id>.passing.json); (2) the Coder's actual delivered
+    files from the room transcript; (3) only as a last resort the Repairer's re-typed FINAL_PROJECT
+    text. (3) is dangerous - a weak Repairer regularly hallucinates a different project than the one
+    that was built - so we fall to it only when neither the sidecar nor the Coder's files exist."""
+    manifest = _passing_manifest(run_id) or _coder_manifest(run_id) or parse_manifest(manifest_text)
     files = manifest["files"]
-    ptype = (manifest["type"] or problem.get("project_type") or "python").lower()
-    if ptype not in ("python", "static"):
-        ptype = "python"
+    # Type comes from the ACTUAL files, not the Repairer's claim: index.html present means static even
+    # if the Repairer labeled it python. Fall back to the requested type, then the manifest's type.
+    ptype = _infer_type(files, problem.get("project_type") or manifest.get("type") or "python")
 
     proj_dir = _PROJECTS_DIR / run_id
     if proj_dir.exists():
