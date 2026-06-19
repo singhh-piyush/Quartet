@@ -363,6 +363,14 @@ class Handler(BaseHTTPRequestHandler):
         if confirm:
             description = (body.get("description") or message).strip()
             status = RUNS.start_build(description, project_type, run_id=run_id)
+            # Start a background thread that posts progress updates to the transcript as the build runs.
+            import threading
+            t = threading.Thread(
+                target=self._monitor_build_progress,
+                args=(run_id,),
+                daemon=True,
+            )
+            t.start()
             self._send_json({**status, "run_id": run_id, "project_type": project_type})
             return
 
@@ -378,6 +386,69 @@ class Handler(BaseHTTPRequestHandler):
             "needs_confirmation": True,
             "status": "idle"
         })
+
+    def _monitor_build_progress(self, run_id: str) -> None:
+        """Background thread: watches the run state and emits brief Orchestrator status messages to the
+        chat transcript so the user sees real-time updates without polling the build status endpoint."""
+        import time
+        from bench.events import read_events
+        events_path = EVENTS_DIR / f"{run_id}.jsonl"
+        EVENTS_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Track which agent roles we've already announced.
+        announced_roles: set[str] = set()
+        last_status = None
+        poll_interval = 1.5
+        timeout = 600  # give up watching after 10 min
+        deadline = time.monotonic() + timeout
+
+        def post(content: str) -> None:
+            self._append_chat_turn(run_id, "orchestrator", "Orchestrator", content)
+
+        # Brief delay so the "starting" message lands after the confirm response is processed
+        time.sleep(2.0)
+        post("Starting the build — spinning up Spec, Coder, Tester, and Repairer…")
+
+        agent_labels = {"spec": "Spec", "coder": "Coder", "tester": "Tester", "repairer": "Repairer"}
+        phase_msgs = {
+            "spec": "Spec has written the project spec.",
+            "coder": "Coder has written the code.",
+            "tester": "Tester has run the tests.",
+            "repairer": "Repairer has checked and packaged the project.",
+        }
+
+        while time.monotonic() < deadline:
+            time.sleep(poll_interval)
+            st = RUNS.status()
+            if st.get("run_id") != run_id:
+                break
+            current_status = st.get("status")
+
+            # Announce agent completions by watching for their last message in the events log
+            try:
+                events = read_events(str(events_path)) if events_path.exists() else []
+                for ev in events:
+                    role = (ev.get("role") or "").lower()
+                    if role in agent_labels and role not in announced_roles:
+                        ev_type = ev.get("type", "")
+                        if ev_type in ("solution", "scored", "message") and ev.get("content"):
+                            announced_roles.add(role)
+                            post(phase_msgs.get(role, f"{agent_labels[role]} finished."))
+            except Exception:  # noqa: BLE001
+                pass
+
+            if current_status == "done" and last_status != "done":
+                last_status = "done"
+                post("✅ Build complete! The project is ready — check the Output panel for files and a live preview.")
+                break
+            elif current_status == "error" and last_status != "error":
+                error = st.get("error") or "an unexpected error occurred"
+                post(f"❌ Build failed: {error[:200]}")
+                break
+            elif current_status == "stopped" and last_status != "stopped":
+                post("Build was stopped.")
+                break
+            last_status = current_status
 
     def _append_chat_turn(self, run_id: str, role: str, sender: str, content: str) -> None:
         """Append one conversational turn to the run's message transcript (the same log the agents use),

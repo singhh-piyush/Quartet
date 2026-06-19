@@ -13,12 +13,7 @@ For a python project:
   request, the edge cases the Planner listed, and your own adversarial cases.
 - Do not use pytest and do not write `def test_` functions. Plain asserts only. No network, no files,
   no randomness unless seeded.
-
-For a static project:
-- There are no automated tests. Say so in one line and hand off so the Repairer can run the build
-  check (it verifies `index.html` is present and the files are non-empty).
-
-Output format: output each test file the same way the Coder does, one fenced block per file:
+- Output each test file the same way the Coder does, one fenced block per file:
 
 === FILE: test_calc.py ===
 ```python
@@ -27,5 +22,12 @@ assert add(2, 3) == 5
 print("ok")
 ```
 
-End your message with exactly this line and nothing after it:
+For a static project:
+- There are no automated tests. Write one short sentence saying so, then hand off immediately.
+- Do NOT restate the plan or describe the project. Just hand off.
+
+Rules:
+- Mention ONLY @Repairer at the end. Do not mention any other agent or participant.
+
+Your LAST line must be exactly this and nothing after it:
 @Repairer please run these.

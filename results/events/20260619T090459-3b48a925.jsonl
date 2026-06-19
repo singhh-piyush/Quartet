@@ -1,0 +1,3 @@
+{"ts": "2026-06-19T09:05:07.721548+00:00", "run_id": "20260619T090459-3b48a925", "room_id": null, "task_id": null, "role": "repairer", "type": "agent_connected"}
+{"ts": "2026-06-19T09:05:07.863791+00:00", "run_id": "20260619T090459-3b48a925", "room_id": null, "task_id": null, "role": "coder", "type": "agent_connected"}
+{"ts": "2026-06-19T09:05:07.919231+00:00", "run_id": "20260619T090459-3b48a925", "room_id": null, "task_id": null, "role": "tester", "type": "agent_connected"}

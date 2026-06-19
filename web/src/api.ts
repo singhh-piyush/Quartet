@@ -169,8 +169,21 @@ export function startBuild(description: string, projectType: string, stack?: Par
 // Returns the run status plus the Orchestrator's reply (also written into the run transcript).
 export type BuildChatResult = RunStatus & { reply: string; description: string; project_type: string; needs_confirmation?: boolean };
 
-export function buildChat(message: string, projectType: string, stack?: Partial<ModelConfig>, runId?: string | null, confirm?: boolean): Promise<BuildChatResult> {
-  return postJson<BuildChatResult>("/api/build/chat", { message, project_type: projectType, stack, run_id: runId, confirm }, "build chat");
+export function buildChat(
+  message: string,
+  projectType: string,
+  stack?: Partial<ModelConfig>,
+  runId?: string | null,
+  confirm?: boolean,
+  description?: string,
+): Promise<BuildChatResult> {
+  // description carries the Orchestrator's normalized request on the Confirm step, where the user
+  // typed nothing new (message is empty). Without it the server would start an empty build.
+  return postJson<BuildChatResult>(
+    "/api/build/chat",
+    { message, project_type: projectType, stack, run_id: runId, confirm, description },
+    "build chat",
+  );
 }
 
 export function fetchProject(runId: string): Promise<ProjectInfo> {

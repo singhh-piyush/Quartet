@@ -79,22 +79,31 @@ def run_project(project_type: str = "python") -> dict:
     Returns a dict with keys: passed (bool), error (str or None), timed_out (bool)."""
     start = time.monotonic()
     
-    # Extract the most recent manifest from the transcript
+    # Extract the most recent manifest from the transcript. Scan ALL messages and pick the
+    # last Coder message that contains actual file blocks (largest one wins when there are
+    # multiple repair rounds). This avoids "no valid files" when the Coder's message arrives
+    # in the transcript log slightly after the Tester's handoff message.
     manifest = ""
     run_id = os.environ.get("QUARTET_RUN_ID")
     if run_id:
         transcript_path = Path("results/transcripts") / f"{run_id}.messages.jsonl"
         if transcript_path.exists():
+            best_manifest = ""
             for line in transcript_path.read_text(encoding="utf-8").splitlines():
                 if not line.strip():
                     continue
                 try:
                     data = json.loads(line)
-                    # Use the last message that contains file blocks as the manifest
-                    if "=== FILE:" in data.get("content", ""):
-                        manifest = data["content"]
+                    content = data.get("content", "")
+                    # Accept any message that has file blocks; prefer Coder messages.
+                    # Keep the LARGEST manifest seen (most complete project version).
+                    if "=== FILE:" in content:
+                        if len(content) > len(best_manifest):
+                            best_manifest = content
                 except json.JSONDecodeError:
                     pass
+            manifest = best_manifest
+
 
     parsed = parse_manifest(manifest)
     files = parsed["files"]

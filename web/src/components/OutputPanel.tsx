@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -55,6 +55,7 @@ export function OutputPanel({
   transcript,
   room,
   live,
+  buildDone = false,
 }: {
   project: ProjectInfo | null;
   runId: string | null;
@@ -64,11 +65,22 @@ export function OutputPanel({
   transcript?: Transcript | null;
   room?: RoomState;
   live?: boolean;
+  // buildDone: when true and the project is a static site, auto-switch to preview.
+  buildDone?: boolean;
 }) {
   const isStatic = project?.type === "static" && project?.has_static_entry;
   const [tab, setTab] = useState<Tab>("chat");
   const [selected, setSelected] = useState<string | null>(null);
   const [content, setContent] = useState<string>("");
+  const autoSwitched = useRef(false);
+
+  // Auto-switch to preview tab when the build is done and it's a static site.
+  useEffect(() => {
+    if (buildDone && isStatic && !autoSwitched.current) {
+      autoSwitched.current = true;
+      setTab("preview");
+    }
+  }, [buildDone, isStatic]);
 
   // Default the selection to the first non-README file once a project lands.
   useEffect(() => {
@@ -135,10 +147,10 @@ export function OutputPanel({
         <AnimatePresence mode="wait">
           <motion.div
             key={tab}
-            initial={{ opacity: 0, y: 10 }}
+            initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
             className="absolute inset-0 flex flex-col"
           >
             {tab === "chat" && room ? (
@@ -148,7 +160,7 @@ export function OutputPanel({
                   <AgentStrip room={room} />
                 </div>
                 <div className="min-h-0 flex-1">
-                  <BandRoom transcript={transcript || null} room={room} live={live || false} focus={null} embedded filterType="agents-only" />
+                  <BandRoom transcript={transcript || null} room={room} live={live || false} focus={null} embedded filterType="agents-only" animate={live || false} />
                 </div>
               </div>
             ) : !project ? (

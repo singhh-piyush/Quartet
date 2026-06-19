@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { roleMeta } from "../theme";
 import type { RoomState, Role, Transcript, TranscriptMessage } from "../types";
+import { useTypewriter } from "../hooks/useTypewriter";
 
 const ROLES: Role[] = ["spec", "coder", "tester", "repairer", "conductor"];
 
@@ -53,45 +54,48 @@ function MentionChip({ text, isUser }: { text: string; isUser?: boolean }) {
   );
 }
 
-function Body({ content, color, isUser }: { content: string; color: string; isUser?: boolean }) {
-  const parts = useMemo(() => segments(content), [content]);
-  if (parts.length === 0) return null;
+
+
+
+// Blinking cursor shown at the end of a message that is still being typed.
+function Cursor({ color }: { color: string }) {
   return (
-    <div className="mt-1.5 space-y-2">
-      {parts.map((p, i) =>
-        p.code ? (
-          <pre
-            key={i}
-            className="overflow-x-auto rounded-md border border-[var(--line)] bg-black/70 p-2.5 font-mono text-[12.5px] leading-relaxed text-[var(--text)]"
-            style={{ boxShadow: `inset 2px 0 0 ${color}` }}
-          >
-            {p.text}
-          </pre>
-        ) : (
-          <p key={i} className={`whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed ${isUser ? "text-black/90" : "text-[var(--text-2)]"}`}>
-            {p.text}
-          </p>
-        ),
-      )}
-    </div>
+    <span
+      className="inline-block w-[2px] h-[1.1em] rounded-sm align-middle ml-0.5 animate-blip"
+      style={{ background: color, verticalAlign: "text-bottom" }}
+    />
   );
 }
 
-function Message({ m, dim }: { m: TranscriptMessage; dim: boolean }) {
+function Message({
+  m,
+  dim,
+  revealed,
+  animate,
+}: {
+  m: TranscriptMessage;
+  dim: boolean;
+  revealed: number;
+  animate: boolean;
+}) {
   const meta = speakerMeta(m.role);
   const terminal = m.kind && m.kind !== "message";
   const isUser = meta.isUser;
-  
+
+  // Slice the content to only reveal what the typewriter has reached.
+  const visibleContent = animate ? m.content.slice(0, revealed) : m.content;
+  const isTyping = animate && revealed < m.content.length;
+
   return (
     <div className={`flex w-full ${isUser ? "justify-end" : "justify-start"}`}>
       <div
         className={`max-w-[85%] flex flex-col transition-opacity duration-300 ${
           isUser ? "rounded-2xl rounded-br-sm text-black px-3.5 py-2" : "rounded-2xl rounded-bl-sm gap-1 px-4 py-3"
         }`}
-        style={{ 
-          background: isUser ? "var(--accent)" : `${meta.color}15`, 
+        style={{
+          background: isUser ? "var(--accent)" : `${meta.color}15`,
           border: isUser ? "none" : `1px solid ${meta.color}30`,
-          opacity: dim ? 0.4 : 1 
+          opacity: dim ? 0.4 : 1,
         }}
       >
         {!isUser && (
@@ -110,7 +114,42 @@ function Message({ m, dim }: { m: TranscriptMessage; dim: boolean }) {
             ))}
           </div>
         )}
-        <Body content={m.content} color={isUser ? "rgba(0,0,0,0.5)" : meta.color} isUser={isUser} />
+        {/* Render the visible content — the typewriter slices it, then appends a blinking cursor
+            while still animating */}
+        {visibleContent.length > 0 && (
+          <div className="mt-1.5 space-y-2">
+            {segments(visibleContent).map((p, i, arr) =>
+              p.code ? (
+                <pre
+                  key={i}
+                  className="overflow-x-auto rounded-md border border-[var(--line)] bg-black/70 p-2.5 font-mono text-[12.5px] leading-relaxed text-[var(--text)]"
+                  style={{ boxShadow: `inset 2px 0 0 ${meta.color}` }}
+                >
+                  {p.text}
+                  {isTyping && i === arr.length - 1 && <Cursor color={meta.color} />}
+                </pre>
+              ) : (
+                <p
+                  key={i}
+                  className={`whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed ${
+                    isUser ? "text-black/90" : "text-[var(--text-2)]"
+                  }`}
+                >
+                  {p.text}
+                  {isTyping && i === arr.length - 1 && <Cursor color={isUser ? "rgba(0,0,0,0.6)" : meta.color} />}
+                </p>
+              ),
+            )}
+          </div>
+        )}
+        {/* Show the cursor even before first character arrives */}
+        {visibleContent.length === 0 && isTyping && (
+          <div className="mt-1.5">
+            <p className="whitespace-pre-wrap font-sans text-[13.5px] leading-relaxed text-[var(--text-2)]">
+              <Cursor color={meta.color} />
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -120,8 +159,8 @@ function Typing({ role, preview }: { role: Role; preview: string }) {
   const meta = roleMeta[role];
   return (
     <div className="flex w-full justify-start">
-      <div 
-        className="max-w-[85%] flex flex-col gap-1 rounded-2xl rounded-bl-sm px-4 py-3" 
+      <div
+        className="max-w-[85%] flex flex-col gap-1 rounded-2xl rounded-bl-sm px-4 py-3"
         style={{ background: `${meta.color}15`, border: `1px solid ${meta.color}30` }}
       >
         <div className="flex items-center gap-2">
@@ -152,6 +191,10 @@ export function BandRoom({
   focus,
   embedded = false,
   filterType = "all",
+  sending = false,
+  // animate: when true, new messages are typed in character-by-character.
+  // Only agents-only panels (the Output section) animate; the user/orchestrator chat does not.
+  animate = false,
 }: {
   transcript: Transcript | null;
   room: RoomState;
@@ -161,6 +204,9 @@ export function BandRoom({
   // own header and dock a composer below, presenting the thread as one cohesive chat window.
   embedded?: boolean;
   filterType?: "all" | "user-only" | "agents-only";
+  // sending: show a "Orchestrator is thinking" indicator while waiting for the API response
+  sending?: boolean;
+  animate?: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
   const allMessages = transcript?.messages ?? [];
@@ -184,6 +230,21 @@ export function BandRoom({
   const showTyping = filterType !== "user-only" && live && !room.finished && activeRole !== null && (lastRole !== activeRole || messages.length === 0);
   const typingPreview = activeRole ? room.agents[activeRole]?.streamPreview || room.agents[activeRole]?.lastPreview || "" : "";
 
+  // Build a stable key + content list for the typewriter. We use (role + index) as the key so
+  // re-polled transcripts with identical content don't re-animate.
+  const typewriterItems = useMemo(
+    () =>
+      animate
+        ? messages.map((m, i) => ({
+            key: `${m.role}-${i}-${m.ts ?? i}`,
+            content: m.content,
+          }))
+        : [],
+    [messages, animate],
+  );
+
+  const typewriterMap = useTypewriter(typewriterItems);
+
   // autoscroll this panel's own container (never the window) as new messages arrive
   useEffect(() => {
     const el = listRef.current;
@@ -197,7 +258,7 @@ export function BandRoom({
     if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [focus]);
 
-  const empty = messages.length === 0 && !showTyping;
+  const empty = messages.length === 0 && !showTyping && !sending;
 
   return (
     <section className={`flex h-full flex-col overflow-hidden ${embedded ? "" : "rounded-xl panel-raised"}`}>
@@ -215,7 +276,7 @@ export function BandRoom({
         </header>
       )}
 
-      <div ref={listRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
+      <div ref={listRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-3 py-4">
         {empty ? (
           <div className="flex h-full items-center justify-center px-6 text-center">
             <p className="font-mono text-[12.5px] leading-relaxed text-[var(--text-3)]">
@@ -226,11 +287,37 @@ export function BandRoom({
           </div>
         ) : (
           <>
-            {messages.map((m, i) => (
-              <div key={i} data-role={asRole(m.role)}>
-                <Message m={m} dim={focus !== null && asRole(m.role) !== focus} />
+            {messages.map((m, i) => {
+              const key = `${m.role}-${i}-${m.ts ?? i}`;
+              const tw = animate ? typewriterMap.get(key) : undefined;
+              return (
+                <div key={i} data-role={asRole(m.role)}>
+                  <Message
+                    m={m}
+                    dim={focus !== null && asRole(m.role) !== focus}
+                    revealed={tw ? tw.revealed : m.content.length}
+                    animate={animate && !!(tw && !tw.done)}
+                  />
+                </div>
+              );
+            })}
+            {/* Show orchestrator thinking indicator while waiting for API response */}
+            {sending && (
+              <div className="flex w-full justify-start">
+                <div
+                  className="flex flex-col gap-1 rounded-2xl rounded-bl-sm px-4 py-3"
+                  style={{ background: `${roleMeta.conductor.color}15`, border: `1px solid ${roleMeta.conductor.color}30` }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-display text-[13px] font-semibold" style={{ color: roleMeta.conductor.color }}>Orchestrator</span>
+                    <span className="flex items-center gap-1 font-mono text-[11px] text-[var(--text-3)]">
+                      <span className="h-1.5 w-1.5 animate-blip rounded-full" style={{ background: roleMeta.conductor.color }} />
+                      thinking
+                    </span>
+                  </div>
+                </div>
               </div>
-            ))}
+            )}
             {showTyping && activeRole && <Typing role={activeRole} preview={typingPreview} />}
           </>
         )}

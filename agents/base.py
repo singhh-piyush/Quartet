@@ -26,8 +26,10 @@ _PROMPTS = Path(__file__).resolve().parent.parent / "prompts"
 
 # Cap agent generations: temperature 0 keeps handoff lines and @mentions stable, and a token ceiling
 # stops a default-temp small model from running away mid-message (which reads as a loop stall).
+# 4096 is enough for a full multi-file static site without cutting off mid-block, while staying
+# under the 8000 total token limit (prompt + max) enforced by some cloud providers (e.g. Groq).
 _AGENT_TEMPERATURE = 0
-_AGENT_MAX_TOKENS = 3072
+_AGENT_MAX_TOKENS = 4096
 
 # The local model is a reasoning-distilled build (--reasoning-format deepseek). Left to think, its
 # chain-of-thought alone exceeds the token budget, so the turn ends (finish=length) with the actual
@@ -154,6 +156,20 @@ def _record_message(role: str, content: str, mentions: list) -> None:
         pass
 
 
+def _normalize_mentions(raw: list) -> list[str]:
+    """Turn raw mention strings the model emitted (e.g. 'singhpiyush/tester', '@Tester') into clean
+    role labels for the transcript, so the chat shows '@Tester' not a username/role handle. A mention
+    that names no known role is kept verbatim."""
+    out: list[str] = []
+    for x in raw:
+        s = str(x).lstrip("@").lower()
+        role = next((r for r in _KNOWN_ROLES if r in s), None)
+        label = role.capitalize() if role else str(x)
+        if label not in out:  # keep unique-in-order
+            out.append(label)
+    return out
+
+
 def _resolve_targets(tools, wanted: list[str]) -> list[str]:
     """Map @Role names to actual participant handles/names in the room (case-insensitive), so
     tools.send_message can resolve them. Returns the strings to pass as mentions."""
@@ -244,8 +260,8 @@ class _TelemetryAdapter(LangGraphAdapter):
                 emit("agent_stream", role=self._role, room_id=room_id, text=t)
         elif etype == "on_chat_model_end":
             out = (event.get("data") or {}).get("output")
-            tcs = [getattr(tc, "get", lambda *_: None)("name") if isinstance(tc, dict) else getattr(tc, "name", "?")
-                   for tc in (getattr(out, "tool_calls", None) or [])]
+            tool_calls = getattr(out, "tool_calls", None) or []
+            tcs = [tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "?") for tc in tool_calls]
             logging.info("[%s] chat_model_end: end_content=%d stream=%d tool_calls=%s finish=%s",
                          self._role, len(_ai_text(out)), len(self._turn_stream.get(room_id, "")), tcs,
                          (getattr(out, "response_metadata", {}) or {}).get("finish_reason"))
@@ -253,6 +269,31 @@ class _TelemetryAdapter(LangGraphAdapter):
             text = _ai_text(out) or self._turn_stream.get(room_id, "")
             if text:
                 self._turn_content[room_id] = text
+            # Cloud models commonly put the WHOLE handoff (files, @mention) inside a band_send_message
+            # tool call, with no assistant text at all (end_content=0, stream=0, finish=tool_calls).
+            # The on_tool_start input capture is unreliable for these (the args stream in as chunks, so
+            # data.input is not yet the full dict), which left _sent_content empty: the message was
+            # delivered by Band but never recorded to the transcript, so the UI showed nothing and the
+            # Repairer's run_project could not find the Coder's files. Capture the resolved args here
+            # from the final AIMessage's tool_calls, the reliable point where they are fully formed.
+            for tc in tool_calls:
+                name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", "")
+                if name != _SEND_TOOL:
+                    continue
+                args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:  # noqa: BLE001 - malformed tool args must not crash the stream handler
+                        args = None
+                if isinstance(args, dict):
+                    c = args.get("content") or ""
+                    # Keep the longest content seen this turn (a model may emit a stray short call first).
+                    if len(c.strip()) >= len(self._sent_content.get(room_id, "").strip()):
+                        self._sent_content[room_id] = c
+                        self._sent_mentions[room_id] = args.get("mentions") or []
+                    self._turn_posted[room_id] = True
+                break
 
     async def on_message(self, msg, tools, history, participants_msg, contacts_msg, *, is_session_bootstrap, room_id):
         # Ignore any room other than the one this run is pinned to (see _TARGET_ROOM). A fresh
@@ -285,10 +326,21 @@ class _TelemetryAdapter(LangGraphAdapter):
             # The model called band_send_message itself; record what it posted for the transcript and
             # emit the posted event (the inbox-scoped conductor cannot see this to emit it).
             c = self._sent_content.get(room_id, "")
-            m = [str(x) for x in (self._sent_mentions.get(room_id) or [])]
-            _record_message(self._role, c, m)
-            if c:
-                emit("message_posted", role=self._role, room_id=room_id, preview=c, mentions=m)
+            m = _normalize_mentions(self._sent_mentions.get(room_id) or [])
+            # Guard: a band_send_message call with trivially short content (< 20 chars) means the
+            # model fired the tool prematurely before the actual file blocks were generated. Treat it
+            # as not posted so the auto-post fallback below takes over with the streamed content.
+            if len(c.strip()) < 20:
+                logging.info(
+                    "[%s] band_send_message called but content too short (%d chars) — treating as not posted; "
+                    "auto-post fallback will use streamed answer",
+                    self._role, len(c.strip()),
+                )
+                self._turn_posted[room_id] = False
+            else:
+                _record_message(self._role, c, m)
+                if c:
+                    emit("message_posted", role=self._role, room_id=room_id, preview=c, mentions=m)
         else:
             # Fallback: the model gave a final answer but never called band_send_message, so the loop
             # would stall. Post that answer ourselves, routed to whoever the text @mentions, else next.
@@ -301,8 +353,14 @@ class _TelemetryAdapter(LangGraphAdapter):
                              self._role, _looks_like_echo(content), len(content))
             else:
                 # Keep only real role names; the participant list embeds usernames (@singhpiyush, @john)
-                # that must never become handoff targets.
-                named = [m for m in _MENTION_RE.findall(content) if m.lower() in _KNOWN_ROLES]
+                # that must never become handoff targets. De-duplicate (case-insensitive, order kept):
+                # the model often repeats "@Coder ... @Coder", and Band rejects a message with duplicate
+                # mentions (422 duplicate_mentions), which would silently drop the whole handoff.
+                _seen: set[str] = set()
+                named = [
+                    m for m in _MENTION_RE.findall(content)
+                    if m.lower() in _KNOWN_ROLES and not (m.lower() in _seen or _seen.add(m.lower()))
+                ]
                 mentions = _resolve_targets(tools, named)
                 nxt = _HANDOFF.get(self._role)
                 route = named
@@ -313,6 +371,9 @@ class _TelemetryAdapter(LangGraphAdapter):
                     route = [nxt] if nxt else []
                     if mentions and not named:
                         content = f"@{nxt} {content}"  # surface the routing in the visible text too
+                # Final guard: resolution can still collide two role names onto one handle; Band 422s on
+                # any duplicate, so keep the mention list unique-in-order before sending.
+                mentions = list(dict.fromkeys(mentions))
                 if mentions:
                     try:
                         await tools.send_message(content, mentions=mentions)
