@@ -82,6 +82,9 @@ _ALLOWED_ORIGINS = {o.strip() for o in os.environ.get("QUARTET_ALLOWED_ORIGINS",
 RUNS = RunManager()
 
 _RUN_ID_OK = re.compile(r"^[A-Za-z0-9._-]+$")  # guards the run_id -> filename mapping (no traversal)
+# Latest Orchestrator-planned build description per run, so Confirm builds the accumulated spec even if
+# the client did not echo it back. In-memory only (lost on restart), like the keystore.
+_PENDING_PLANS: dict[str, str] = {}
 _REPLAY_GAP_CAP = 2.0  # never sit on dead air longer than this between two replayed events
 _LIVE_POLL = 0.3       # seconds between polls when tailing an active run
 
@@ -341,7 +344,10 @@ class Handler(BaseHTTPRequestHandler):
         the build. The user turn and the Orchestrator's reply are written into the run transcript so the
         Build chat shows the full conversation alongside the four agents' handoffs."""
         message = (body.get("message") or "").strip()
-        if not message:
+        confirm = body.get("confirm", False)
+        # An empty message is valid on Confirm (the user clicks the button without typing); the build
+        # spec comes from the accumulated plan. Only a plain chat turn requires a message.
+        if not message and not confirm:
             self._send_json({"error": "message required"}, status=400)
             return
         project_type = (body.get("project_type") or "auto").lower()
@@ -349,8 +355,7 @@ class Handler(BaseHTTPRequestHandler):
             project_type = "auto"
         if isinstance(body.get("stack"), dict):
             run_config.save(body["stack"])
-            
-        confirm = body.get("confirm", False)
+
         run_id = body.get("run_id")
 
         if not run_id:
@@ -358,10 +363,22 @@ class Handler(BaseHTTPRequestHandler):
             from datetime import datetime, timezone
             run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S") + "-" + uuid.uuid4().hex[:8]
 
+        # Read the prior conversation BEFORE appending the new turn, so the Orchestrator sees context
+        # (follow-ups refine the same build) without the current message being duplicated into history.
+        history = self._read_chat_history(run_id)
         self._append_chat_turn(run_id, "user", "You", message)
 
         if confirm:
-            description = (body.get("description") or message).strip()
+            # Build the accumulated spec. Priority: the client's echoed description, then the server's
+            # last stored plan for this run, then a merge of every user turn (so Confirm never starts an
+            # empty build even if the plan step was skipped or its description was lost).
+            description = (body.get("description") or "").strip() or _PENDING_PLANS.get(run_id, "").strip()
+            if not description:
+                prior_users = " ".join(
+                    h["content"] for h in history if (h.get("role") or "").lower() == "user"
+                )
+                description = " ".join(f"{prior_users} {message}".split())
+            _PENDING_PLANS.pop(run_id, None)
             status = RUNS.start_build(description, project_type, run_id=run_id)
             # Start a background thread that posts progress updates to the transcript as the build runs.
             import threading
@@ -371,12 +388,13 @@ class Handler(BaseHTTPRequestHandler):
                 daemon=True,
             )
             t.start()
-            self._send_json({**status, "run_id": run_id, "project_type": project_type})
+            self._send_json({**status, "run_id": run_id, "project_type": project_type, "description": description})
             return
 
         from orchestrator.orchestrator_chat import interpret
 
-        plan = interpret(message, project_type)
+        plan = interpret(message, project_type, history)
+        _PENDING_PLANS[run_id] = plan["description"]  # remembered for the Confirm step
         self._append_chat_turn(run_id, "orchestrator", "Orchestrator", plan["reply"])
         self._send_json({
             "run_id": run_id,
@@ -449,6 +467,31 @@ class Handler(BaseHTTPRequestHandler):
                 post("Build was stopped.")
                 break
             last_status = current_status
+
+    def _read_chat_history(self, run_id: str) -> list[dict]:
+        """The conversational turns (user + orchestrator) recorded for this run so far, oldest first, so
+        the Orchestrator can interpret a follow-up in context. The four agents' handoff messages are
+        skipped: they are not part of the planning dialogue."""
+        if not _RUN_ID_OK.match(run_id):
+            return []
+        path = TRANSCRIPTS_DIR / f"{run_id}.messages.jsonl"
+        if not path.exists():
+            return []
+        out: list[dict] = []
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    d = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                role = (d.get("role") or "").lower()
+                if role in ("user", "orchestrator") and d.get("content"):
+                    out.append({"role": role, "content": d["content"]})
+        except OSError:
+            return []
+        return out
 
     def _append_chat_turn(self, run_id: str, role: str, sender: str, content: str) -> None:
         """Append one conversational turn to the run's message transcript (the same log the agents use),

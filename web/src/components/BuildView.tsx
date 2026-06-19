@@ -55,7 +55,18 @@ export function BuildView({
 
   const active = status.active || status.status === "starting";
   const tone = statusTone(status.status);
-  const showOutput = !!liveRunId && (active || project !== null || status.status === "error" || status.status === "done");
+  // Show the output pane only once the agents are ACTUALLY working (one of them is writing, code is
+  // streaming, or a real agent message landed), not during the 10-15s "starting agents" warmup. So the
+  // chat stays full-width while the Orchestrator narrates the warmup, then the output rises in beside it.
+  const agentsWorking =
+    !!live.room.activeRole ||
+    !!live.room.code.preview ||
+    (transcript?.messages?.some((m) => {
+      const k = (m.role || "").toLowerCase();
+      return k !== "user" && k !== "orchestrator";
+    }) ??
+      false);
+  const showOutput = !!liveRunId && (agentsWorking || project !== null || status.status === "error" || status.status === "done");
 
   // Default the Coder to Groq gpt-oss-120b for builds (good code, fast) the first time we have config.
   const seeded = useRef(false);
@@ -154,10 +165,9 @@ export function BuildView({
         transition: "grid-template-columns 0.32s cubic-bezier(0.16, 1, 0.3, 1)",
       }}
     >
-      {/* LEFT: the chat window (thread + composer in one panel). Capped + centered so that when the
-          output pane opens and this column shrinks from full-width to 480px, the chat barely reflows
-          (it was already ~this wide), keeping the bring-up smooth. */}
-      <section className="flex flex-col overflow-hidden h-full rounded-xl panel-raised mx-auto w-full max-w-[680px]">
+      {/* LEFT: the chat window (thread + composer in one panel). Spans the full width on its own; when
+          the agents start the grid column animates down to 480px and the output pane rises in beside it. */}
+      <section className="flex flex-col overflow-hidden h-full rounded-xl panel-raised">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2.5">
           <div className="flex items-center gap-2.5">
             <span className="font-display text-[15px] font-semibold text-[var(--text)]">Build chat</span>
